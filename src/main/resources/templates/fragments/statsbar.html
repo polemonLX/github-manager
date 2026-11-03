@@ -1,0 +1,57 @@
+<div th:fragment="statsbar" class="stats-bar" id="statsbar"
+     hx-get="/api/statsbar"
+     th:attr="hx-trigger='every ' + ${statsbarRefreshIntervalSeconds ?: 10} + 's'"
+     hx-swap="outerHTML">
+
+    <div class="stats-group">
+
+        <div class="stats-item">
+            <span class="stats-label">git repositories:</span>
+            <span class="stats-value" th:text="${stats?.repositoryCount ?: 0}">0</span>
+        </div>
+
+        <div class="stats-item">
+            <span class="stats-label">open pull requests:</span>
+            <span class="stats-value" th:text="${stats?.openPrCount ?: 0}">0</span>
+        </div>
+
+        <div class="stats-item">
+            <span class="stats-label">feature branches:</span>
+            <span class="stats-value" th:text="${stats?.featureBranchCount ?: 0}">0</span>
+        </div>
+
+        <div class="stats-item">
+            <span class="stats-label">bugfix branches:</span>
+            <span class="stats-value" th:text="${stats?.bugfixBranchCount ?: 0}">0</span>
+        </div>
+
+        <div class="stats-item">
+            <span class="stats-label">other branches:</span>
+            <span class="stats-value" th:text="${stats?.otherBranchCount ?: 0}">0</span>
+        </div>
+
+    </div>
+
+    <div class="stats-right">
+
+        <div class="stats-rate" th:if="${rateLimit != null}">
+            <span class="stats-rate-label">API rate limit</span>
+            <div class="stats-rate-bar">
+                <div class="stats-rate-fill"
+                     th:classappend="${rateLimit.remainingPercent lt 10} ? 'rate-danger' : (${rateLimit.remainingPercent lt 30} ? 'rate-warning' : 'rate-ok')"
+                     th:style="'width:' + ${rateLimit.remainingPercent} + '%'"></div>
+            </div>
+            <span class="stats-rate-count">
+                <b th:text="${rateLimit.remaining}">0</b><span class="stats-rate-total" th:text="'/' + ${rateLimit.limit}">/0</span>
+            </span>
+            <span class="stats-rate-reset" th:text="'· resets in ' + ${rateLimit.minutesUntilReset} + ' min'">· resets</span>
+        </div>
+
+        <div class="stats-token">
+            <span class="token-label">token:</span>
+            <span class="token-value" th:text="${githubToken}">********</span>
+        </div>
+
+    </div>
+
+</div>

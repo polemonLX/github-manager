@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings for CI. Safe to commit: it contains NO secret.
+  The token is injected at runtime via the PACKAGES_TOKEN environment variable
+  (a classic PAT with read:packages).
+
+  Use it with:  mvn -s settings.xml ...
+
+  It declares both the credentials (servers) and the GitHub Packages repository
+  (profile), so the pom no longer needs a <repositories> block.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+    <servers>
+        <server>
+            <id>githubPersonal</id>
+            <username>polemonLX</username>
+            <password>${env.PACKAGES_TOKEN}</password>
+        </server>
+    </servers>
+
+    <profiles>
+        <profile>
+            <id>github-packages</id>
+            <repositories>
+                <repository>
+                    <id>githubPersonal</id>
+                    <url>https://maven.pkg.github.com/polemonLX/*</url>
+                </repository>
+            </repositories>
+        </profile>
+    </profiles>
+
+    <activeProfiles>
+        <activeProfile>github-packages</activeProfile>
+    </activeProfiles>
+
+</settings>

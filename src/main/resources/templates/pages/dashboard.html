@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en" th:with="pageTitle='Dashboard'">
+<body>
+
+<div th:fragment="content">
+
+    <div class="content-header">
+        <h1 class="page-title">Dashboard</h1>
+    </div>
+
+    <div class="dash-grid">
+        <div class="stat-card">
+            <span class="stat-card-value" th:text="${repositoryCount}">0</span>
+            <span class="stat-card-label">Repositories</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-card-value" th:text="${openPrCount}">0</span>
+            <span class="stat-card-label">Open pull requests</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-card-value" th:text="${branchCount}">0</span>
+            <span class="stat-card-label">Branches</span>
+        </div>
+        <div class="stat-card">
+            <div class="stat-actions-row">
+                <span class="stat-card-value" th:text="${actionsRunning}">0</span>
+                <span th:if="${actionsRunning > 0}" class="stat-dot" title="Actions currently running"></span>
+            </div>
+            <span class="stat-card-label">Actions running</span>
+        </div>
+    </div>
+
+    <section class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">Active Workflows</h2>
+            <span class="panel-subtitle">Custom release pipelines will show their live progress here</span>
+        </div>
+        <div th:fragment="active-workflow-content" class="panel-body" hx-get="/dashboards/active-workflow/refresh"
+             th:attr="hx-trigger='every ' + ${activeWorkflowRefreshIntervalSeconds ?: 10} + 's'"
+             hx-swap="outerHTML">
+            <div class="workflow-empty" th:if="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}">
+                <div class="workflow-empty-icon">⚙️</div>
+                <p class="workflow-empty-title">No workflows running</p>
+                <p class="workflow-empty-text">When a pipeline is running, its steps and status appear here in real time.</p>
+            </div>
+
+            <div th:unless="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}"
+                 class="workflow-card" th:each="activeWorkflow : ${activeWorkflows}">
+
+                <div class="workflow-card-header">
+                    <div class="workflow-info">
+                        <span class="workflow-name" th:text="${activeWorkflow.workflowName}"></span>
+                        <span class="workflow-stage-count" th:text="${activeWorkflow.stageCount} + ' stage(s)'"></span>
+                    </div>
+                    <span class="wf-stage-detail" th:if="${activeWorkflow.startedAt != null}"
+                          th:text="'started ' + ${#temporals.format(activeWorkflow.startedAt, 'yyyy-MM-dd HH:mm')}"></span>
+                </div>
+
+                <ol class="workflow-card-stages">
+                    <li th:each="stage : ${activeWorkflow.stages}" class="workflow-card-stage">
+                        <span class="wf-stage-index" th:text="${stage.index}"></span>
+                        <div class="workflow-card-stage-text">
+                            <div class="wf-stage-title" th:text="${stage.title}"></div>
+                            <div class="wf-stage-detail" th:text="${stage.details}"></div>
+                        </div>
+                        <span class="lk-status-dot" th:classappend="${stage.status == 'success'} ? 'ok' : 'off'"></span>
+                    </li>
+                </ol>
+
+                <ol class="workflow-card-stages" th:if="${activeWorkflow.nextStages != null and not #lists.isEmpty(activeWorkflow.nextStages)}">
+                    <li th:each="stage : ${activeWorkflow.nextStages}" class="workflow-card-stage">
+                        <span class="wf-stage-index" th:text="${stage.index}"></span>
+                        <div class="workflow-card-stage-text">
+                            <div class="wf-stage-title" th:text="${stage.title}"></div>
+                            <div class="wf-stage-detail">Up next</div>
+                        </div>
+                    </li>
+                </ol>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- Repository Lookup (design 1b: search below Active Workflows) -->
+    <section class="panel lk-panel">
+        <div class="panel-header">
+            <h2 class="panel-title">Repository Lookup</h2>
+            <span class="panel-subtitle">Type a repositoryDomain name — matching repositories update live.</span>
+        </div>
+        <div class="panel-body">
+
+            <div class="lk-search-row">
+                <div class="lk-search">
+                    <span class="lk-search-icon">⌕</span>
+                    <input type="text" id="repoSearch" class="form-control lk-input"
+                           placeholder="Filter repositories by name…" spellcheck="false"
+                           autocomplete="off">
+                </div>
+                <span class="lk-count">Showing <b id="lkShown" th:text="${repositories != null ? #lists.size(repositories) : 0}">0</b>
+                    of <span th:text="${repositories != null ? #lists.size(repositories) : 0}">0</span></span>
+            </div>
+
+            <div class="lk-table-wrap">
+                <table class="lk-table">
+                    <thead>
+                    <tr>
+                        <th>Repository</th>
+                        <th>Actions</th>
+                        <th>PRs</th>
+                        <th>Branches</th>
+                        <th>Releases</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+
+                    <tbody th:if="${repositories == null or #lists.isEmpty(repositories)}">
+                    <tr>
+                        <td colspan="6" class="lk-empty">No repositories tracked yet.</td>
+                    </tr>
+                    </tbody>
+
+                    <tbody class="lk-group" th:each="repo : ${repositories}"
+                           th:attr="data-name=${#strings.toLowerCase(repo.owner + '/' + repo.name)}">
+                        <tr class="lk-row">
+                            <td class="lk-repo">
+                                <div class="lk-repo-name">
+                                    <a th:href="'https://github.com/' + ${repo.owner} + '/' + ${repo.name}"
+                                       th:text="${repo.name}" target="_blank" rel="noopener noreferrer"></a>
+                                </div>
+                                <div class="lk-repo-full" th:text="${repo.owner + '/' + repo.name}"></div>
+                            </td>
+                            <td>
+                                <span th:if="${#lists.size(repo.actionsRunning) gt 0}" class="lk-badge lk-badge-active"
+                                      th:text="${repo.actionsRunning} + ' running'">running</span>
+                                <span th:unless="${#lists.size(repo.actionsRunning) gt 0}" class="lk-badge">Idle</span>
+                            </td>
+                            <td class="lk-num" th:text="${#lists.size(repo.openPullRequests)}">0</td>
+                            <td class="lk-num" th:text="${#lists.size(repo.allBranches)}">0</td>
+                            <td class="lk-num" th:text="${#lists.size(repo.releases)}">0</td>
+                            <td class="lk-chevron">▸</td>
+                        </tr>
+                        <tr class="lk-detail" hidden>
+                            <td colspan="5">
+                                <div class="lk-tabs">
+                                    <button type="button" class="lk-tab" data-tab="actions">
+                                        Actions <span class="lk-tab-count" th:text="${#lists.size(repo.workflows)}">0</span>
+                                    </button>
+                                    <button type="button" class="lk-tab" data-tab="prs">
+                                        Pull requests <span class="lk-tab-count" th:text="${#lists.size(repo.openPullRequests)}">0</span>
+                                    </button>
+                                    <button type="button" class="lk-tab active" data-tab="branches">
+                                        Branches <span class="lk-tab-count" th:text="${#lists.size(repo.allBranches)}">0</span>
+                                    </button>
+                                    <button type="button" class="lk-tab" data-tab="releases">
+                                        Releases <span class="lk-tab-count" th:text="${#lists.size(repo.releases)}">0</span>
+                                    </button>
+                                </div>
+
+                                <!-- Actions -->
+                                <div class="lk-tabpanel" data-panel="actions" hidden>
+                                    <div th:if="${#lists.isEmpty(repo.workflows)}" class="lk-detail-empty">No workflows.</div>
+                                    <a th:each="wf : ${repo.workflows}" class="lk-li lk-li-link"
+                                       th:href="${wf.url}" target="_blank" rel="noopener noreferrer">
+                                        <span class="lk-status-dot"
+                                              th:classappend="${wf.state == 'active'} ? 'ok' : 'off'"></span>
+                                        <span class="lk-li-name" th:text="${wf.name}"></span>
+                                    </a>
+                                </div>
+
+                                <!-- Pull requests -->
+                                <div class="lk-tabpanel" data-panel="prs" hidden>
+                                    <div th:if="${#lists.isEmpty(repo.openPullRequests)}" class="lk-detail-empty">No open pull requests.</div>
+                                    <a th:each="pr : ${repo.openPullRequests}" class="lk-li lk-li-link"
+                                       th:href="${pr.url}" target="_blank" rel="noopener noreferrer">
+                                        <span class="lk-li-icon pr"></span>
+                                        <span class="lk-li-num" th:text="'#' + ${pr.number}">#0</span>
+                                        <span class="lk-li-name" th:text="${pr.title}"></span>
+                                        <span class="lk-li-meta" th:text="${pr.author}"></span>
+                                    </a>
+                                </div>
+
+                                <!-- Branches -->
+                                <div class="lk-tabpanel" data-panel="branches">
+                                    <div th:if="${#lists.isEmpty(repo.allBranches)}" class="lk-detail-empty">No branches.</div>
+                                    <div th:each="branch : ${repo.allBranches}" class="lk-li">
+                                        <span class="lk-li-icon branch"></span>
+                                        <span class="lk-li-name lk-mono" th:text="${branch.name}"></span>
+                                        <span th:if="${branch.protectedBranch}" class="lk-protected">protected</span>
+                                    </div>
+                                </div>
+
+                                <!-- Releases -->
+                                <div class="lk-tabpanel" data-panel="releases" hidden>
+                                    <div th:if="${#lists.isEmpty(repo.releases)}" class="lk-detail-empty">No releases.</div>
+                                    <div th:each="rel : ${repo.releases}" class="lk-li">
+                                        <span class="lk-li-icon release"></span>
+                                        <span class="lk-li-name lk-mono" th:text="${rel.name}"></span>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+
+                    <tbody id="lkNoMatch" hidden>
+                    <tr>
+                        <td colspan="5" class="lk-empty">No repositories match your search.</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+    </section>
+
+</div>
+
+</body>
+</html>

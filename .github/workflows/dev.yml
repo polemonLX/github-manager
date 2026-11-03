@@ -1,0 +1,37 @@
+name: dev
+
+# Every push to a branch other than main (covered by release.yml) and every pull request
+# builds and runs the tests:
+#   - unit tests:        classes ending in *Test    (Surefire)
+#   - integration tests: classes ending in *TestIT  (Failsafe)
+
+on:
+  push:
+    branches-ignore: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read      # read com.polemon:parent from GitHub Packages
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Build and test
+        run: mvn -s settings.xml -B verify
+        env:
+          # classic PAT with read:packages (to read the private parent); consumed by settings.xml
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en" th:with="pageTitle='Pull Requests'">
+<body>
+
+<div th:fragment="content">
+
+    <div class="content-header">
+        <h1 class="page-title">Pull Requests</h1>
+        <div class="header-actions">
+            <button type="button" class="btn btn-primary" id="syncBtn" data-sync-url="/pull-requests/sync">Sync</button>
+        </div>
+    </div>
+
+    <div th:if="${#lists.isEmpty(repositories)}" class="pr-empty">
+        No repositories with open pull requests.
+    </div>
+
+    <div class="pr-list">
+        <details class="pr-card" th:each="repo : ${repositories}">
+            <summary class="pr-summary">
+                <span class="pr-repo-name" th:text="${repo.owner + '/' + repo.name}"></span>
+                <a class="pr-repo-link"
+                   th:href="'https://github.com/' + ${repo.owner} + '/' + ${repo.name} + '/pulls'"
+                   target="_blank" rel="noopener noreferrer"
+                   title="Open on GitHub"
+                   onclick="event.stopPropagation()">&#8599;</a>
+                <button type="button" class="btn pr-refresh refresh-repo-btn" data-sync-url="/pull-requests/sync"
+                        th:attr="data-owner=${repo.owner},data-name=${repo.name}">Refresh</button>
+            </summary>
+
+            <table class="pr-table">
+                <thead>
+                <tr>
+                    <th class="pr-num-col">#</th>
+                    <th>Title</th>
+                    <th>Author</th>
+                    <th>Created</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="pr : ${repo.openPullRequests}">
+                    <td class="pr-num"><span th:text="${pr.number}"></span></td>
+                    <td>
+                        <a class="pr-title" th:href="${pr.url}" th:text="${pr.title}"
+                           target="_blank" rel="noopener noreferrer"></a>
+                    </td>
+                    <td th:text="${pr.author}"></td>
+                    <td class="pr-created" th:text="${pr.createdAt}"></td>
+                </tr>
+                </tbody>
+            </table>
+        </details>
+    </div>
+
+</div>
+
+</body>
+</html>

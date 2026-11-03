@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en"
+      xmlns:th="http://www.thymeleaf.org">
+
+<head th:replace="~{fragments/head :: head}">
+    <title>Github Manager</title>
+</head>
+
+<body hx-ext="response-targets">
+
+<div id="statsbar" th:replace="~{fragments/statsbar :: statsbar}"></div>
+
+<div class="layout">
+    <div th:replace="~{fragments/sidebar :: sidebar}"></div>
+
+    <main id="content" class="content"
+          th:with="contentParts=${#strings.arraySplit(content, '::')}">
+        <div th:replace="~{${#strings.trim(contentParts[0])} :: ${#strings.trim(contentParts[1])}}"></div>
+    </main>
+</div>
+
+</body>
+</html>

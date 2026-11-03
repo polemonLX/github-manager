@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en" th:with="pageTitle='Workflows'">
+<body>
+
+<div th:fragment="content">
+
+    <!-- Start-workflow modal: opened by a workflow's "Start" button. It asks for
+         the runtime values that were left undecided at creation time (e.g. the
+         branch a pipeline runs on, or a commit targets). Its body is populated by
+         JS from the clicked workflow card. -->
+    <div id="startWorkflowModal" class="modal" style="display: none;">
+        <div class="modal-content modal-content-wide">
+            <div class="modal-header">
+                <h2 class="panel-title" id="startWorkflowTitle">Start workflow</h2>
+                <button type="button" class="modal-close" id="startWorkflowCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">Confirm the values for each stage before starting. Fields left blank
+                    when the workflow was created are asked for here.</p>
+                <div id="startWorkflowStages" class="wf-start-stage-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" id="startWorkflowCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="startWorkflowConfirmBtn">Start workflow</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden source of the branch names available per repository, so the start
+         modal can build a real branch dropdown per stage without another request. -->
+    <div id="wfBranchSource" hidden>
+        <div th:each="repo : ${repositories}" class="wf-branch-repo"
+             th:attr="data-repo=${repo.owner + '/' + repo.name}">
+            <span th:each="branch : ${repo.allBranches}" th:attr="data-branch=${branch.name}"></span>
+        </div>
+    </div>
+
+    <div class="content-header">
+        <h1 class="page-title">Workflows</h1>
+        <div class="header-actions">
+            <button type="button" class="btn btn-primary" id="createWorkflowBtn">Create workflow</button>
+        </div>
+    </div>
+
+    <!-- Create-workflow builder: hidden until "Create workflow" is pressed. -->
+    <div id="workflowBuilder" class="panel workflow-builder" style="display: none;">
+        <div class="workflow-builder-header">
+            <h2 class="panel-title">New workflow</h2>
+            <button type="button" class="modal-close" id="closeWorkflowBuilderBtn">&times;</button>
+        </div>
+        <div class="panel-body">
+
+            <!-- Editor for a single stage. Click + to add it to the list below. -->
+            <div class="wf-stage-editor">
+
+                <div class="wf-row">
+                    <div class="wf-field">
+                        <label for="wfRepo">Repository</label>
+                        <select class="form-control" id="wfRepo">
+                            <option value="">Select a repository...</option>
+                            <option th:each="repo : ${repositories}"
+                                    th:value="${repo.owner + '/' + repo.name}"
+                                    th:text="${repo.owner + '/' + repo.name}"></option>
+                        </select>
+                    </div>
+
+                    <div class="wf-field">
+                        <label for="wfTask">Task</label>
+                        <select class="form-control" id="wfTask">
+                            <option value="">Select a task...</option>
+                            <option th:each="stageTask : ${stageTasks}"
+                                    th:value="${stageTask.name()}"
+                                    th:text="${stageTask.label}"></option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Target branch: applies to both Commit and Pipeline tasks -->
+                <div class="wf-field" id="wfBranchField" style="display: none;">
+                    <label for="wfTargetBranch">Target branch (optional)</label>
+                    <input type="text" class="form-control" id="wfTargetBranch" placeholder="decided when the workflow runs">
+                </div>
+
+                <!-- Commit task -->
+                <div class="wf-task-fields" id="wfCommitFields" style="display: none;">
+                    <div class="wf-field">
+                        <label for="wfCommitOp">Commit operation</label>
+                        <select class="form-control" id="wfCommitOp">
+                            <option th:each="commitOp : ${commitOperations}"
+                                    th:value="${commitOp.name()}"
+                                    th:text="${commitOp.label}"></option>
+                        </select>
+                    </div>
+
+                    <!-- Maven bump: which version part to increment (default Patch) -->
+                    <div class="wf-field" id="wfBumpFields" style="display: none;">
+                        <label>Version part to bump</label>
+                        <div class="wf-runmode" id="wfVersionPart">
+                            <button type="button" class="wf-runmode-btn"
+                                    th:each="versionPart : ${versionParts}"
+                                    th:classappend="${versionPart.name() == 'PATCH'} ? 'active'"
+                                    th:attr="data-value=${versionPart.name()}"
+                                    th:text="${versionPart.label}"></button>
+                        </div>
+                    </div>
+
+                    <div class="wf-field" id="wfCommitFileField">
+                        <label for="wfCommitFile">File path</label>
+                        <input type="text" class="form-control" id="wfCommitFile" placeholder="path/to/file">
+                    </div>
+
+                    <!-- find-replace -->
+                    <div class="wf-op-fields" id="wfFindReplaceFields" style="display: none;">
+                        <div class="wf-field">
+                            <label for="wfFrPattern">Pattern (regex)</label>
+                            <input type="text" class="form-control" id="wfFrPattern" placeholder="&lt;version&gt;(.*)&lt;/version&gt;">
+                        </div>
+                        <div class="wf-field">
+                            <label for="wfFrReplacement">Replacement</label>
+                            <input type="text" class="form-control" id="wfFrReplacement" placeholder="&lt;version&gt;1.4.0&lt;/version&gt;">
+                        </div>
+                    </div>
+
+                    <!-- set-content -->
+                    <div class="wf-op-fields" id="wfSetContentFields" style="display: none;">
+                        <div class="wf-field">
+                            <label for="wfScContent">Content</label>
+                            <textarea class="form-control" id="wfScContent" rows="4" placeholder="New file content"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="wf-field" id="wfCommitMessageField">
+                        <label for="wfCommitMessage">Commit message</label>
+                        <input type="text" class="form-control" id="wfCommitMessage" placeholder="e.g. chore: bump version">
+                    </div>
+                </div>
+
+                <!-- Pipeline task -->
+                <div class="wf-task-fields" id="wfPipelineFields" style="display: none;">
+                    <div class="wf-field">
+                        <label for="wfPipeline">Repository workflow</label>
+                        <select class="form-control" id="wfPipeline">
+                            <option value="">Select a pipeline...</option>
+                            <th:block th:each="repo : ${repositories}">
+                                <option th:each="workflow : ${repo.workflows}"
+                                        th:value="${workflow.url}"
+                                        th:text="${workflow.name}"
+                                        th:attr="data-repo=${repo.owner + '/' + repo.name}"></option>
+                            </th:block>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Run mode: only shown when at least one stage already exists -->
+                <div class="wf-field" id="wfRunModeField" style="display: none;">
+                    <label>Start</label>
+                    <div class="wf-runmode" id="wfRunMode">
+                        <button type="button" class="wf-runmode-btn"
+                                th:each="runMode, iter : ${runModes}"
+                                th:classappend="${iter.first} ? 'active'"
+                                th:attr="data-value=${runMode.name()}"
+                                th:text="${runMode.label}"></button>
+                    </div>
+                </div>
+
+                <div class="wf-editor-actions">
+                    <button type="button" class="btn btn-primary" id="wfAddStageBtn" title="Add this stage">+</button>
+                </div>
+
+            </div>
+
+            <!-- Added stages -->
+            <ol class="wf-stage-list" id="wfStageList"></ol>
+
+            <div class="wf-save-row">
+                <input type="text" class="form-control wf-name-input" id="wfName" placeholder="Workflow name">
+                <button type="button" class="btn btn-primary" id="wfSaveBtn">Save workflow</button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Existing workflows, one card per workflow. -->
+    <div class="workflow-list">
+
+        <div th:if="${workflows == null or #lists.isEmpty(workflows)}" class="workflow-empty-row">
+            No workflows created yet.
+        </div>
+
+        <details th:each="workflow : ${workflows}" class="workflow-card">
+            <summary class="workflow-card-header">
+                <span class="pr-chevron"></span>
+                <div class="workflow-info">
+                    <span class="workflow-name" th:text="${workflow.name}"></span>
+                    <span class="workflow-stage-count" th:text="${#lists.size(workflow.stages)} + ' stage(s)'"></span>
+                </div>
+                <div class="workflow-actions" onclick="event.preventDefault()">
+                    <button type="button" class="btn btn-primary workflow-start-btn"
+                            th:attr="data-workflow-name=${workflow.name}">Start</button>
+                    <button type="button" class="btn workflow-edit-btn">Modify</button>
+                    <button type="button" class="btn btn-danger workflow-delete-btn"
+                            hx-target="#content" hx-swap="innerHTML"
+                            th:attr="hx-delete=@{/workflows/delete/{name}(name=${workflow.name})},
+                                     hx-confirm='Delete workflow ' + ${workflow.name} + '?'">Delete</button>
+                </div>
+            </summary>
+
+            <ol class="workflow-card-stages">
+                <li th:each="stage, iter : ${workflow.stages}" class="workflow-card-stage"
+                    th:attr="data-repo-owner=${stage.repository.owner},
+                             data-repo-name=${stage.repository.name},
+                             data-task=${stage.task != null ? stage.task.name() : null},
+                             data-commit-operation=${stage.commitOperation != null ? stage.commitOperation.name() : null},
+                             data-target-branch=${stage.targetBranch},
+                             data-commit-file-path=${stage.commitFilePath},
+                             data-commit-find-regex=${stage.commitFindRegex},
+                             data-commit-content=${stage.commitContent},
+                             data-commit-message=${stage.commitMessage},
+                             data-version-part=${stage.versionPart != null ? stage.versionPart.name() : null},
+                             data-workflow-url=${stage.workflowUrl},
+                             data-run-mode=${stage.runMode != null ? stage.runMode.name() : null}">
+                    <span class="wf-stage-index" th:text="${iter.index + 1}"></span>
+                    <div class="workflow-card-stage-text">
+                        <div class="wf-stage-title"
+                             th:text="${stage.repository.owner + '/' + stage.repository.name} + ' — ' + (${stage.task.name() == 'COMMIT'} ? 'Commit' : 'Pipeline')"></div>
+                        <div class="wf-stage-detail">
+                            <th:block th:if="${stage.task.name() == 'COMMIT'}">
+                                <span th:if="${stage.commitOperation != null and stage.commitOperation.name() == 'BUMP_MAVEN_VERSION'}"
+                                      th:text="'bump Maven version' + (${stage.versionPart != null} ? ' (' + ${stage.versionPart.label} + ')' : '')"></span>
+                                <span th:if="${stage.commitOperation != null and stage.commitOperation.name() == 'FIND_AND_REPLACE_REGEX'}"
+                                      th:text="'replace /' + ${stage.commitFindRegex} + '/ in ' + ${stage.commitFilePath}"></span>
+                                <span th:if="${stage.commitOperation != null and stage.commitOperation.name() == 'SET_FILE_CONTENT'}"
+                                      th:text="'set content of ' + ${stage.commitFilePath}"></span>
+                            </th:block>
+                            <th:block th:unless="${stage.task.name() == 'COMMIT'}">
+                                <span th:text="'pipeline: ' + ${stage.workflowUrl}"></span>
+                            </th:block>
+                            <span th:if="${stage.targetBranch != null and !stage.targetBranch.isEmpty()}" th:text="' on ' + ${stage.targetBranch}"></span>
+                        </div>
+                    </div>
+                    <span th:if="${stage.runMode != null}" class="workflow-run-mode-badge"
+                          th:text="${stage.runMode.name() == 'WITH_PREVIOUS'} ? 'With previous' : 'After previous'"></span>
+                </li>
+            </ol>
+        </details>
+
+    </div>
+
+</div>
+
+<!-- Returned (with HTTP 400) when starting a workflow fails validation. -->
+<div th:fragment="startWorkflowError" class="alert alert-danger" role="alert" th:text="${error}"></div>
+
+</body>
+</html>

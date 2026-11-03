@@ -1,0 +1,61 @@
+<aside th:fragment="sidebar" class="sidebar">
+
+    <nav class="sidebar-nav">
+
+        <a th:href="@{/dashboard}"
+           hx-get="/dashboard"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/dashboard">
+            Dashboard
+        </a>
+
+        <a th:href="@{/repositories}"
+           hx-get="/repositories"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/repositories">
+            Repositories
+        </a>
+
+        <a th:href="@{/pull-requests}"
+           hx-get="/pull-requests"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/pull-requests">
+            Pull Requests
+        </a>
+
+        <a th:href="@{/issues}"
+           hx-get="/issues"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/issues">
+            Issues
+        </a>
+
+        <a th:href="@{/workflows}"
+           hx-get="/workflows"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/workflows">
+            Workflows
+        </a>
+
+        <a th:href="@{/settings}"
+           hx-get="/settings"
+           hx-target="#content"
+           hx-push-url="true"
+           class="sidebar-item"
+           data-path="/settings">
+            Settings
+        </a>
+
+    </nav>
+
+</aside>

@@ -1,0 +1,15 @@
+<head th:fragment="head">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title th:text="${pageTitle} ? ${pageTitle} + ' - GitHub Manager' : 'GitHub Manager'">GitHub Manager</title>
+
+    <link rel="icon" type="image/svg+xml" th:href="@{/favicon.svg}">
+
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/response-targets.js"></script>
+
+    <script th:src="@{/js/app.js}" defer></script>
+</head>

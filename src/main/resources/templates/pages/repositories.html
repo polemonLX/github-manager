@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en" th:with="pageTitle='Repositories'">
+<body>
+
+<div th:fragment="content">
+
+    <div id="addRepoModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="modal-close" id="closeBtn">&times;</button>
+            </div>
+            <!-- On success (200) the whole content fragment is swapped (modal closes,
+                 list refreshes); on 400 only #errorMessage is swapped so the modal
+                 stays open for correction (via the response-targets extension). -->
+            <form id="addRepoForm"
+                  hx-post="/repositories/add"
+                  hx-target="#content"
+                  hx-target-400="#errorMessage"
+                  hx-swap="innerHTML">
+                <div class="modal-body">
+                    <div id="errorMessage"></div>
+                    <div class="form-group">
+                        <label for="repoOwner">Repository Owner:</label>
+                        <input type="text" id="repoOwner" name="owner" class="form-control" placeholder="repo-owner" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="repoName">Repository Name:</label>
+                        <input type="text" id="repoName" name="name" class="form-control" placeholder="repo-name" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary" id="saveBtn">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="removeRepoModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="modal-close" id="removeCloseBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Stop tracking <strong id="removeRepoName"></strong>?</p>
+                <p class="modal-hint">This only removes it from GitHub Manager. Nothing is deleted on GitHub.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" id="removeCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-danger" id="removeConfirmBtn">Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="content-header">
+        <h1 class="page-title">Repositories</h1>
+        <div class="header-actions">
+            <button type="button" class="btn btn-primary" id="syncBtn" data-sync-url="/repositories/sync">Sync</button>
+            <button type="button" class="btn btn-primary" id="addRepoBtn">Add repo</button>
+        </div>
+    </div>
+
+    <table class="data-table">
+        <thead>
+        <tr>
+            <th>Repository</th>
+            <th>Releases</th>
+            <th>Actions running</th>
+            <th>Open PRs</th>
+            <th>Feature branches</th>
+            <th>Bugfix branches</th>
+            <th>Other branches</th>
+            <th>Last Synced</th>
+            <th class="actions-col" style="text-align: center;">&#8801;</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:if="${#lists.isEmpty(repositories)}">
+            <td colspan="9" class="empty-state">No repositories added yet.</td>
+        </tr>
+        <tr th:each="repo : ${repositories}">
+            <td>
+                <a th:href="'https://github.com/' + ${repo.owner} + '/' + ${repo.name}" th:text="${repo.owner + '/' + repo.name}" target="_blank" rel="noopener noreferrer"></a>
+            </td>
+            <td>
+                <label>
+                    <select class="form-control">
+                        <option th:text="${#lists.size(repo.releases)} + ' releases'" selected disabled></option>
+                        <option th:each="release : ${repo.releases}"
+                                th:text="${release.name}" disabled>
+                        </option>
+                    </select>
+                </label>
+            </td>
+            <td th:text="${#lists.size(repo.actionsRunning)}"></td>
+            <td th:text="${#lists.size(repo.openPullRequests)}"></td>
+            <td th:text="${#lists.size(repo.featureBranches)}"></td>
+            <td th:text="${#lists.size(repo.bugfixBranches)}"></td>
+            <td th:text="${#lists.size(repo.otherBranches)}"></td>
+            <td th:text="${repo.lastSyncedAt}"></td>
+            <td class="actions-col">
+                <div class="row-actions">
+                    <button type="button" class="btn refresh-repo-btn" data-sync-url="/repositories/sync"
+                            th:attr="data-owner=${repo.owner},data-name=${repo.name}">Refresh</button>
+                    <button type="button" class="btn btn-danger remove-repo-btn"
+                            th:attr="data-owner=${repo.owner},data-name=${repo.name}">Remove</button>
+                </div>
+            </td>
+        </tr>
+        </tbody>
+    </table>
+
+</div>
+
+<!-- Returned (with HTTP 400) into the add-repo modal's #errorMessage slot when
+     validation fails, so the modal stays open showing the reason. -->
+<div th:fragment="addRepoError" class="alert alert-danger" role="alert" th:text="${error}"></div>
+
+</body>
+</html>
