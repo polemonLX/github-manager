@@ -9,9 +9,12 @@ import com.polemon.github_manager.service.WorkflowService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 /**
  * Web controller serving the workflows page, listing registered GitHub Actions
@@ -54,7 +57,8 @@ public class WorkflowsController {
 
     /**
      * Validates and persists a new internal workflow, then re-renders the
-     * workflows fragment.
+     * workflows fragment. An invalid workflow (no name, no stages, or a name
+     * the user already uses) is answered by {@link #rejectInvalidWorkflow}.
      *
      * @param identity the caller, from auth's identity token
      * @param model     the model to populate for rendering
@@ -159,6 +163,20 @@ public class WorkflowsController {
         workflowService.stopWorkflow(identity.userId(), workflowName);
 
         return answerRequest(identity, model, hxRequest);
+    }
+
+    /**
+     * Answers a workflow the builder can't save (save, update or delete) with
+     * {@code 400} and {@code {"success": false, "error": "<reason>"}}, which the
+     * builder shows to the user.
+     *
+     * @param e the validation failure
+     * @return the {@code 400} answer with the reason
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> rejectInvalidWorkflow(IllegalArgumentException e) {
+        log.warn("Rejected workflow: {}", e.getMessage());
+        return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
     }
 
     /**
