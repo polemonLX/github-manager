@@ -3,6 +3,7 @@ package com.polemon.github_manager.controller.web;
 import com.polemon.api_lib.identity.Identity;
 import com.polemon.github_manager.exceptions.InvalidRepositoryException;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
+import com.polemon.github_manager.model.dto.RepositoryGroupDTO;
 import com.polemon.github_manager.service.RepositoryService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * Web controller serving the repositories page: listing tracked repositories,
@@ -30,17 +33,77 @@ public class RepositoriesController {
     }
 
     /**
-     * Builds the repositories page, listing all tracked repositories.
+     * Builds the repositories page, listing the tracked repositories, all or
+     * those of one group.
      *
-     * @param identity the caller, from auth's identity token
+     * @param identity  the caller, from auth's identity token
      * @param model     the model to populate for rendering
      * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
+     * @param group     the id of the group to show, if any
      * @return the repositories content fragment or the full page layout
      */
     @GetMapping
     public String showRepositoriesPage(Identity identity, Model model,
-                                       @RequestHeader(value = "HX-Request", required = false) String hxRequest) {
-        return answerRequest(identity, model, hxRequest);
+                                       @RequestHeader(value = "HX-Request", required = false) String hxRequest,
+                                       @RequestParam(value = "group", required = false) String group) {
+        return answerRequest(identity, model, hxRequest, group);
+    }
+
+    /**
+     * Creates a repository group. On success re-renders the repositories
+     * fragment; on failure responds {@code 400} with an error fragment for the
+     * create-group modal, which stays open.
+     *
+     * @param identity  the caller, from auth's identity token
+     * @param model     the model to populate for rendering
+     * @param response  the HTTP response, used to set a 400 status on error
+     * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
+     * @param name      the new group's name
+     * @param group     the group shown when the form was sent, kept as the filter
+     * @return the repositories content fragment (success) or the error fragment (failure)
+     */
+    @PostMapping("/groups")
+    public String createGroup(Identity identity, Model model, HttpServletResponse response,
+                              @RequestHeader(value = "HX-Request", required = false) String hxRequest,
+                              @RequestParam(value = "name", required = false) String name,
+                              @RequestParam(value = "group", required = false) String group) {
+        try {
+            repositoryService.createGroup(identity.userId(), name);
+            return answerRequest(identity, model, hxRequest, group);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to create group '{}': {}", name, e.getMessage());
+            return badRequest(model, response, e);
+        }
+    }
+
+    /**
+     * Saves the groups a repository is in, from the edit modal. On success
+     * re-renders the repositories fragment; on failure responds {@code 400}
+     * with an error fragment for the edit modal, which stays open.
+     *
+     * @param identity  the caller, from auth's identity token
+     * @param model     the model to populate for rendering
+     * @param response  the HTTP response, used to set a 400 status on error
+     * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
+     * @param owner     the repository owner
+     * @param name      the repository name
+     * @param groupIds  the groups it must be in; none checked means none
+     * @param group     the group shown when the form was sent, kept as the filter
+     * @return the repositories content fragment (success) or the error fragment (failure)
+     */
+    @PostMapping("/edit")
+    public String editRepository(Identity identity, Model model, HttpServletResponse response,
+                                 @RequestHeader(value = "HX-Request", required = false) String hxRequest,
+                                 @RequestParam("owner") String owner, @RequestParam("name") String name,
+                                 @RequestParam(value = "groupIds", required = false) List<String> groupIds,
+                                 @RequestParam(value = "group", required = false) String group) {
+        try {
+            repositoryService.setGroups(identity.userId(), owner, name, groupIds);
+            return answerRequest(identity, model, hxRequest, group);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to set the groups of {}/{}: {}", owner, name, e.getMessage());
+            return badRequest(model, response, e);
+        }
     }
 
     /**
@@ -58,7 +121,8 @@ public class RepositoriesController {
     @PostMapping("/add")
     public String addRepository(Identity identity, Model model, HttpServletResponse response,
                                 @RequestHeader(value = "HX-Request", required = false) String hxRequest,
-                                @ModelAttribute RepositoryDTO repository) {
+                                @ModelAttribute RepositoryDTO repository,
+                                @RequestParam(value = "group", required = false) String group) {
         try {
             if (repository.getOwner() == null || repository.getOwner().trim().isEmpty() ||
                     repository.getName() == null || repository.getName().trim().isEmpty())
@@ -70,7 +134,7 @@ public class RepositoriesController {
             repositoryService.addRepository(identity.userId(), new RepositoryDTO(repository.getOwner(), repository.getName()));
             log.info("Added repository: {}/{}", repository.getOwner(), repository.getName());
 
-            return answerRequest(identity, model, hxRequest);
+            return answerRequest(identity, model, hxRequest, group);
         } catch (IllegalArgumentException | InvalidRepositoryException e) {
             log.warn("Failed to add repository: https://github.com/{}/{}. Reason: {}", repository.getOwner(), repository.getName(), e.getMessage());
             response.setStatus(HttpStatus.BAD_REQUEST.value());
@@ -94,7 +158,7 @@ public class RepositoriesController {
                                    @RequestBody RepositoryDTO repository) {
         repositoryService.removeRepository(identity.userId(), new RepositoryDTO(repository.getOwner(), repository.getName()));
         log.info("Removed repository: {}/{}", repository.getOwner(), repository.getName());
-        return answerRequest(identity, model, hxRequest);
+        return answerRequest(identity, model, hxRequest, null);
     }
 
     /**
@@ -123,16 +187,37 @@ public class RepositoriesController {
     }
 
     /**
+     * Answers a failed group change with {@code 400} and the error fragment
+     * shown inside the open modal.
+     *
+     * @param model    the model to populate
+     * @param response the HTTP response, set to 400
+     * @param e        the reason
+     * @return the error fragment
+     */
+    private static String badRequest(Model model, HttpServletResponse response, IllegalArgumentException e) {
+        response.setStatus(HttpStatus.BAD_REQUEST.value());
+        model.addAttribute("error", e.getMessage());
+        return "pages/repositories :: addRepoError";
+    }
+
+    /**
      * Renders either the bare content fragment (for HTMX requests) or the full
      * page layout wrapping it.
      *
      * @param identity  the caller, whose data the page shows
      * @param model     the model to populate
      * @param hxRequest the {@code HX-Request} header value, if present
+     * @param group     the id of the group to show, or {@code null} for all;
+     *                  an id that isn't one of the user's groups shows all
      * @return the view name to render
      */
-    private String answerRequest(Identity identity, Model model, String hxRequest) {
-        model.addAttribute("repositories", repositoryService.getRepositories(identity.userId()));
+    private String answerRequest(Identity identity, Model model, String hxRequest, String group) {
+        List<RepositoryGroupDTO> groups = repositoryService.getGroups(identity.userId());
+        String selected = groups.stream().map(RepositoryGroupDTO::id).filter(id -> id.equals(group)).findFirst().orElse(null);
+        model.addAttribute("groups", groups);
+        model.addAttribute("selectedGroup", selected);
+        model.addAttribute("repositories", repositoryService.getRepositories(identity.userId(), selected));
 
         if ("true".equals(hxRequest))
             return "pages/repositories :: content";

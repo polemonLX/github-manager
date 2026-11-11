@@ -9,8 +9,13 @@ import com.polemon.github_manager.model.domain.TagDomain;
 import com.polemon.github_manager.model.domain.WorkflowDomain;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
 import com.polemon.github_manager.model.dto.api.*;
+import com.polemon.github_manager.model.dto.RepositoryGroupDTO;
 import com.polemon.github_manager.model.entity.RepositoryEntity;
+import com.polemon.github_manager.model.entity.RepositoryGroup;
+import com.polemon.github_manager.model.entity.RepositoryGroupMember;
 import com.polemon.github_manager.model.entity.TrackedRepository;
+import com.polemon.github_manager.repository.RepositoryGroupMemberRepository;
+import com.polemon.github_manager.repository.RepositoryGroupRepository;
 import com.polemon.github_manager.repository.RepositoryRepository;
 import com.polemon.github_manager.repository.TrackedRepositoryRepository;
 import org.junit.jupiter.api.Test;
@@ -31,7 +36,154 @@ class RepositoryServiceTest {
     private final TrackedRepositoryRepository trackedRepositoryRepository = mock(TrackedRepositoryRepository.class);
     private final GitHubClient gitHubClient = mock(GitHubClient.class);
     private final AuthService authService = mock(AuthService.class);
-    private final RepositoryService repositoryService = new RepositoryService(repositoryRepository, trackedRepositoryRepository, gitHubClient, authService);
+    private final RepositoryGroupRepository groupRepository = mock(RepositoryGroupRepository.class);
+    private final RepositoryGroupMemberRepository groupMemberRepository = mock(RepositoryGroupMemberRepository.class);
+    private final RepositoryService repositoryService = new RepositoryService(repositoryRepository, trackedRepositoryRepository,
+            groupRepository, groupMemberRepository, gitHubClient, authService);
+
+    /**
+     * u1 tracks auth (link l1, groups g1 and g2) and portal (link l2, group g1)
+     * and server (link l3, no group); g3 is empty.
+     */
+    private void givenGroups() {
+        when(groupRepository.findByUser("u1")).thenReturn(List.of(new RepositoryGroup("g2", "u1", "libs"),
+                new RepositoryGroup("g1", "u1", "Apps"), new RepositoryGroup("g3", "u1", "empty")));
+        when(groupMemberRepository.findByGroup("g1")).thenReturn(List.of(new RepositoryGroupMember("m1", "g1", "l1"),
+                new RepositoryGroupMember("m2", "g1", "l2")));
+        when(groupMemberRepository.findByGroup("g2")).thenReturn(List.of(new RepositoryGroupMember("m3", "g2", "l1")));
+        when(groupMemberRepository.findByGroup("g3")).thenReturn(List.of());
+        when(trackedRepositoryRepository.findByUser("u1")).thenReturn(List.of(new TrackedRepository("l2", "u1", "r2"),
+                new TrackedRepository("l1", "u1", "r1"), new TrackedRepository("l3", "u1", "r3"), new TrackedRepository("l4", "u1", "gone")));
+        when(repositoryRepository.findById("r1")).thenReturn(Optional.of(repository("r1", "auth")));
+        when(repositoryRepository.findById("r2")).thenReturn(Optional.of(repository("r2", "portal")));
+        when(repositoryRepository.findById("r3")).thenReturn(Optional.of(repository("r3", "server")));
+        when(repositoryRepository.findById("gone")).thenReturn(Optional.empty());
+    }
+
+    @Test
+    void listsEveryRepositoryWithItsGroups() {
+        givenGroups();
+
+        List<RepositoryDTO> repositories = repositoryService.getRepositories("u1", null);
+
+        assertEquals(List.of("auth", "portal", "server"), repositories.stream().map(RepositoryDTO::getName).toList());
+        assertEquals(java.util.Set.of("g1", "g2"), java.util.Set.copyOf(repositories.get(0).getGroupIds()));
+        assertEquals(List.of("g1"), repositories.get(1).getGroupIds());
+        assertEquals(List.of(), repositories.get(2).getGroupIds());
+    }
+
+    @Test
+    void listsOnlyTheRepositoriesOfAGroup() {
+        givenGroups();
+
+        assertEquals(List.of("auth", "portal"), repositoryService.getRepositories("u1", "g1").stream().map(RepositoryDTO::getName).toList());
+        assertEquals(List.of("auth"), repositoryService.getRepositories("u1", "g2").stream().map(RepositoryDTO::getName).toList());
+        assertEquals(List.of(), repositoryService.getRepositories("u1", "g3"));
+    }
+
+    @Test
+    void aGroupThatIsNotTheUsersShowsEveryRepository() {
+        givenGroups();
+
+        assertEquals(3, repositoryService.getRepositories("u1", "someone-elses").size());
+    }
+
+    @Test
+    void listsTheGroupsByName() {
+        givenGroups();
+
+        assertEquals(List.of(new RepositoryGroupDTO("g1", "Apps"), new RepositoryGroupDTO("g3", "empty"), new RepositoryGroupDTO("g2", "libs")),
+                repositoryService.getGroups("u1"));
+    }
+
+    @Test
+    void createsAGroupWithATrimmedName() {
+        RepositoryGroupDTO group = repositoryService.createGroup("u1", "  Apps ");
+
+        ArgumentCaptor<RepositoryGroup> stored = ArgumentCaptor.forClass(RepositoryGroup.class);
+        verify(groupRepository).create(stored.capture());
+        assertEquals("u1", stored.getValue().getUserId());
+        assertEquals("Apps", stored.getValue().getName());
+        assertNotNull(stored.getValue().getId());
+        assertEquals(new RepositoryGroupDTO(stored.getValue().getId(), "Apps"), group);
+    }
+
+    @Test
+    void refusesEmptyOrLongGroupNames() {
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.createGroup("u1", null));
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.createGroup("u1", "   "));
+        assertThrows(IllegalArgumentException.class,
+                () -> repositoryService.createGroup("u1", "x".repeat(RepositoryService.MAX_GROUP_NAME + 1)));
+        repositoryService.createGroup("u1", "x".repeat(RepositoryService.MAX_GROUP_NAME));
+        verify(groupRepository, times(1)).create(any());
+    }
+
+    @Test
+    void refusesADuplicateGroupName() {
+        doThrow(duplicate()).when(groupRepository).create(any());
+
+        assertEquals("A group named 'Apps' already exists",
+                assertThrows(IllegalArgumentException.class, () -> repositoryService.createGroup("u1", "Apps")).getMessage());
+    }
+
+    @Test
+    void otherFailuresCreatingAGroupPropagate() {
+        PersistenceException failure = new PersistenceException(PersistenceException.Reason.FAILURE, "down", null);
+        doThrow(failure).when(groupRepository).create(any());
+
+        assertSame(failure, assertThrows(PersistenceException.class, () -> repositoryService.createGroup("u1", "Apps")));
+    }
+
+    @Test
+    void settingTheGroupsJoinsTheNewOnesAndLeavesTheOthers() {
+        givenGroups();
+        when(repositoryRepository.findByOwnerAndName("polemonLX", "auth")).thenReturn(Optional.of(repository("r1", "auth")));
+        when(groupMemberRepository.findByTrackedRepository("l1")).thenReturn(List.of(new RepositoryGroupMember("m1", "g1", "l1"),
+                new RepositoryGroupMember("m3", "g2", "l1")));
+
+        repositoryService.setGroups("u1", "polemonLX", "auth", List.of("g2", "g3"));
+
+        verify(groupMemberRepository).deleteById("m1");
+        verify(groupMemberRepository, never()).deleteById("m3");
+        ArgumentCaptor<RepositoryGroupMember> created = ArgumentCaptor.forClass(RepositoryGroupMember.class);
+        verify(groupMemberRepository).create(created.capture());
+        assertEquals("g3", created.getValue().getGroupId());
+        assertEquals("l1", created.getValue().getTrackedRepositoryId());
+        assertNotNull(created.getValue().getId());
+    }
+
+    @Test
+    void noGroupsLeavesEveryGroup() {
+        givenGroups();
+        when(repositoryRepository.findByOwnerAndName("polemonLX", "auth")).thenReturn(Optional.of(repository("r1", "auth")));
+        when(groupMemberRepository.findByTrackedRepository("l1")).thenReturn(List.of(new RepositoryGroupMember("m1", "g1", "l1")));
+
+        repositoryService.setGroups("u1", "polemonLX", "auth", null);
+
+        verify(groupMemberRepository).deleteById("m1");
+        verify(groupMemberRepository, never()).create(any());
+    }
+
+    @Test
+    void settingTheGroupsOfAnUntrackedRepositoryFails() {
+        givenGroups();
+        when(repositoryRepository.findByOwnerAndName("polemonLX", "other")).thenReturn(Optional.of(repository("r9", "other")));
+
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.setGroups("u1", "polemonLX", "other", List.of("g1")));
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.setGroups("u1", "polemonLX", "missing", List.of("g1")));
+        verify(groupMemberRepository, never()).create(any());
+    }
+
+    @Test
+    void settingAGroupThatIsNotTheUsersFails() {
+        givenGroups();
+        when(repositoryRepository.findByOwnerAndName("polemonLX", "auth")).thenReturn(Optional.of(repository("r1", "auth")));
+
+        assertEquals("Unknown group", assertThrows(IllegalArgumentException.class,
+                () -> repositoryService.setGroups("u1", "polemonLX", "auth", List.of("g1", "foreign"))).getMessage());
+        verify(groupMemberRepository, never()).create(any());
+        verify(groupMemberRepository, never()).deleteById(any());
+    }
 
     @Test
     void addingARepositoryNobodyTracksStoresSyncsAndLinksIt() throws InvalidRepositoryException {

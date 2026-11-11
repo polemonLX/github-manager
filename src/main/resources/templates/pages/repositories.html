@@ -17,6 +17,7 @@
                   hx-target="#content"
                   hx-target-400="#errorMessage"
                   hx-swap="innerHTML">
+                <input type="hidden" name="group" th:value="${selectedGroup}">
                 <div class="modal-body">
                     <div id="errorMessage"></div>
                     <div class="form-group">
@@ -51,6 +52,64 @@
         </div>
     </div>
 
+    <div id="addGroupModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="modal-close" id="addGroupCloseBtn">&times;</button>
+            </div>
+            <!-- Same pattern as the add-repo modal: 200 swaps #content, 400 shows the reason here. -->
+            <form id="addGroupForm"
+                  hx-post="/repositories/groups"
+                  hx-target="#content"
+                  hx-target-400="#groupErrorMessage"
+                  hx-swap="innerHTML">
+                <input type="hidden" name="group" th:value="${selectedGroup}">
+                <div class="modal-body">
+                    <div id="groupErrorMessage"></div>
+                    <div class="form-group">
+                        <label for="groupName">Group name:</label>
+                        <input type="text" id="groupName" name="name" class="form-control" maxlength="64" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="editRepoModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <strong class="modal-title" id="editRepoName"></strong>
+                <button type="button" class="modal-close" id="editCloseBtn">&times;</button>
+            </div>
+            <!-- The JS fills owner/name and checks the repository's groups when it opens. -->
+            <form id="editRepoForm"
+                  hx-post="/repositories/edit"
+                  hx-target="#content"
+                  hx-target-400="#editErrorMessage"
+                  hx-swap="innerHTML">
+                <input type="hidden" name="owner" id="editRepoOwner">
+                <input type="hidden" name="name" id="editRepoRepoName">
+                <input type="hidden" name="group" th:value="${selectedGroup}">
+                <div class="modal-body">
+                    <div id="editErrorMessage"></div>
+                    <div class="form-group">
+                        <label>Groups:</label>
+                        <p class="modal-hint" th:if="${#lists.isEmpty(groups)}">No groups yet. Create one in the menu on the right.</p>
+                        <label class="check-row" th:each="g : ${groups}">
+                            <input type="checkbox" name="groupIds" class="edit-group-check" th:value="${g.id}">
+                            <span th:text="${g.name}">group</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer modal-footer-split">
+                    <button type="button" class="btn btn-danger remove-repo-btn" id="editRemoveBtn">Remove</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div class="content-header">
         <h1 class="page-title">Repositories</h1>
         <div class="header-actions">
@@ -59,6 +118,8 @@
         </div>
     </div>
 
+    <div class="repo-layout">
+    <div class="repo-main">
     <table class="data-table">
         <thead>
         <tr>
@@ -75,7 +136,8 @@
         </thead>
         <tbody>
         <tr th:if="${#lists.isEmpty(repositories)}">
-            <td colspan="9" class="empty-state">No repositories added yet.</td>
+            <td colspan="9" class="empty-state"
+                th:text="${selectedGroup == null} ? 'No repositories added yet.' : 'No repositories in this group.'">No repositories added yet.</td>
         </tr>
         <tr th:each="repo : ${repositories}">
             <td>
@@ -101,14 +163,37 @@
                 <div class="row-actions">
                     <button type="button" class="btn refresh-repo-btn" data-sync-url="/repositories/sync"
                             th:attr="data-owner=${repo.owner},data-name=${repo.name}">Refresh</button>
-                    <button type="button" class="btn btn-danger remove-repo-btn"
-                            th:attr="data-owner=${repo.owner},data-name=${repo.name}">Remove</button>
+                    <button type="button" class="btn edit-repo-btn"
+                            th:attr="data-owner=${repo.owner},data-name=${repo.name},data-groups=${#strings.listJoin(repo.groupIds, ',')}">Edit</button>
                 </div>
             </td>
         </tr>
         </tbody>
     </table>
-
+    </div>
+    <aside class="repo-groups">
+        <div class="repo-groups-header">
+            <span class="repo-groups-title">Groups</span>
+            <button type="button" class="btn btn-small" id="addGroupBtn" title="Create a group">+ New</button>
+        </div>
+        <nav class="repo-groups-nav">
+            <a th:href="@{/repositories}"
+               hx-get="/repositories"
+               hx-target="#content"
+               hx-push-url="true"
+               class="group-item"
+               th:classappend="${selectedGroup == null} ? 'active'">All</a>
+            <a th:each="g : ${groups}"
+               th:href="@{/repositories(group=${g.id})}"
+               th:attr="hx-get=@{/repositories(group=${g.id})}"
+               hx-target="#content"
+               hx-push-url="true"
+               class="group-item"
+               th:classappend="${g.id == selectedGroup} ? 'active'"
+               th:text="${g.name}">group</a>
+        </nav>
+    </aside>
+    </div>
 </div>
 
 <!-- Returned (with HTTP 400) into the add-repo modal's #errorMessage slot when

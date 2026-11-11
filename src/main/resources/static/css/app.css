@@ -305,6 +305,92 @@ body {
     border-top: 1px solid #eee;
 }
 
+.modal-title {
+    margin-right: auto;
+    align-self: center;
+}
+
+.modal-footer-split {
+    justify-content: space-between;
+}
+
+.check-row {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    font-weight: normal !important;
+    cursor: pointer;
+}
+
+.btn-small {
+    padding: 4px 10px;
+    font-size: 0.8rem;
+}
+
+/* Repositories: the table, with the groups menu on the right (below the header buttons) */
+.repo-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+}
+
+.repo-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.repo-groups {
+    width: 200px;
+    flex-shrink: 0;
+    border-left: 1px solid #d0d7de;
+    padding-left: 12px;
+}
+
+.repo-groups-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.repo-groups-title {
+    font-weight: 600;
+    color: #57606a;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.repo-groups-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.group-item {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 15px;
+    color: #1f2328;
+    text-decoration: none;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group-item:hover {
+    background-color: #f0f2f5;
+}
+
+.group-item.active {
+    padding-left: 9px;
+    font-weight: 600;
+    color: #0969da;
+    background-color: rgba(9, 105, 218, 0.14);
+    border-left: 3px solid #0969da;
+}
+
 .modal-hint {
     margin: 8px 0 0;
     font-size: 0.85rem;

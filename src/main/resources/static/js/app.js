@@ -26,7 +26,8 @@ function updateStatsbar() {
 // endpoints (add/remove/sync/save) that can't be driven declaratively.
 function refreshContent() {
     if (window.htmx) {
-        htmx.ajax('GET', window.location.pathname, {target: '#content', swap: 'innerHTML'});
+        // Keep the query (e.g. the repositories page's ?group= filter)
+        htmx.ajax('GET', window.location.pathname + window.location.search, {target: '#content', swap: 'innerHTML'});
     } else {
         location.reload();
     }
@@ -159,6 +160,77 @@ document.addEventListener('click', function (event) {
                 alert('Error removing repository');
             });
     }
+});
+
+// Create Group modal (repositories page): open/close only; the form submits
+// via HTMX like the add-repo form (200 swaps #content, 400 shows the reason).
+document.addEventListener('click', function (event) {
+    const target = event.target;
+    if (!target)
+        return;
+
+    const modal = document.getElementById('addGroupModal');
+    if (!modal)
+        return;
+
+    if (target.id === 'addGroupBtn') {
+        event.preventDefault();
+        const err = document.getElementById('groupErrorMessage');
+        if (err)
+            err.innerHTML = '';
+        modal.style.display = 'block';
+        const input = document.getElementById('groupName');
+        if (input)
+            input.focus();
+        return;
+    }
+
+    if (target.id === 'addGroupCloseBtn' || target === modal) {
+        modal.style.display = 'none';
+        const form = document.getElementById('addGroupForm');
+        if (form)
+            form.reset();
+    }
+});
+
+// Edit Repository modal (repositories page): a row's Edit button fills it
+// with the repository and checks the groups it is in (data-groups, comma
+// separated ids). Save submits via HTMX; Remove hands over to the remove
+// modal (its button carries the .remove-repo-btn class and the repository).
+document.addEventListener('click', function (event) {
+    const target = event.target;
+    if (!target)
+        return;
+
+    const modal = document.getElementById('editRepoModal');
+    if (!modal)
+        return;
+
+    const editBtn = target.closest ? target.closest('.edit-repo-btn') : null;
+    if (editBtn) {
+        event.preventDefault();
+        const owner = editBtn.getAttribute('data-owner');
+        const name = editBtn.getAttribute('data-name');
+        const groups = (editBtn.getAttribute('data-groups') || '').split(',').filter(Boolean);
+        document.getElementById('editRepoOwner').value = owner;
+        document.getElementById('editRepoRepoName').value = name;
+        document.getElementById('editRepoName').textContent = owner + '/' + name;
+        document.querySelectorAll('.edit-group-check').forEach(function (check) {
+            check.checked = groups.indexOf(check.value) >= 0;
+        });
+        const removeBtn = document.getElementById('editRemoveBtn');
+        removeBtn.setAttribute('data-owner', owner);
+        removeBtn.setAttribute('data-name', name);
+        const err = document.getElementById('editErrorMessage');
+        if (err)
+            err.innerHTML = '';
+        modal.style.display = 'block';
+        return;
+    }
+
+    // Remove: close this modal; the remove modal's own listener opens it
+    if (target.id === 'editRemoveBtn' || target.id === 'editCloseBtn' || target === modal)
+        modal.style.display = 'none';
 });
 
 // Per-row Refresh: sync a single repository.

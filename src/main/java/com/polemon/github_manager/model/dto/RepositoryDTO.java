@@ -49,6 +49,9 @@ public class RepositoryDTO {
     /** Human-readable timestamp of the last successful sync, e.g. {@code 00:01:02 15/07/2026}. */
     private String lastSyncedAt;
 
+    /** Ids of the user's groups this repository is in (filled on the repositories page only). */
+    private List<String> groupIds = new LinkedList<>();
+
     public RepositoryDTO(String owner, String name) {
         this.owner = owner;
         this.name = name;

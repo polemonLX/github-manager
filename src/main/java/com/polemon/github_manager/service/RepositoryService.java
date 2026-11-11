@@ -7,7 +7,11 @@ import com.polemon.github_manager.model.domain.*;
 import com.polemon.github_manager.model.dto.*;
 import com.polemon.github_manager.model.dto.api.*;
 import com.polemon.github_manager.model.entity.RepositoryEntity;
+import com.polemon.github_manager.model.entity.RepositoryGroup;
+import com.polemon.github_manager.model.entity.RepositoryGroupMember;
 import com.polemon.github_manager.model.entity.TrackedRepository;
+import com.polemon.github_manager.repository.RepositoryGroupMemberRepository;
+import com.polemon.github_manager.repository.RepositoryGroupRepository;
 import com.polemon.github_manager.repository.RepositoryRepository;
 import com.polemon.github_manager.repository.TrackedRepositoryRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -39,6 +43,11 @@ public class RepositoryService {
             DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy").withZone(ZoneId.systemDefault());
 
     /**
+     * Longest accepted group name.
+     */
+    static final int MAX_GROUP_NAME = 64;
+
+    /**
      * Service used to retrieve each user's GitHub token for API calls.
      */
     private final AuthService authService;
@@ -54,14 +63,27 @@ public class RepositoryService {
     private final TrackedRepositoryRepository trackedRepositoryRepository;
 
     /**
+     * Store of the users' repository groups.
+     */
+    private final RepositoryGroupRepository groupRepository;
+
+    /**
+     * Store of which tracked repository is in which group.
+     */
+    private final RepositoryGroupMemberRepository groupMemberRepository;
+
+    /**
      * Client for GitHub API interactions (validation and sync).
      */
     private final GitHubClient gitHubClient;
 
     public RepositoryService(RepositoryRepository repositoryRepository, TrackedRepositoryRepository trackedRepositoryRepository,
+                             RepositoryGroupRepository groupRepository, RepositoryGroupMemberRepository groupMemberRepository,
                              GitHubClient gitHubClient, AuthService authService) {
         this.repositoryRepository = repositoryRepository;
         this.trackedRepositoryRepository = trackedRepositoryRepository;
+        this.groupRepository = groupRepository;
+        this.groupMemberRepository = groupMemberRepository;
         this.gitHubClient = gitHubClient;
         this.authService = authService;
     }
@@ -112,6 +134,116 @@ public class RepositoryService {
                 .sorted(Comparator.comparing(RepositoryEntity::getOwner).thenComparing(RepositoryEntity::getName))
                 .map(this::convertEntityToDTO)
                 .toList();
+    }
+
+    /**
+     * Retrieves a user's tracked repositories with the groups each is in,
+     * optionally only those of one group. Like {@link #getRepositories(String)},
+     * from the database only.
+     *
+     * @param userId  the user id
+     * @param groupId the group to show, or {@code null} for all; a group that
+     *                isn't the user's also shows all
+     * @return the repositories, sorted by owner and name, each with its
+     *         {@code groupIds}
+     */
+    public List<RepositoryDTO> getRepositories(String userId, String groupId) {
+        Map<String, List<String>> groupsByLink = new HashMap<>();
+        Set<String> groupIds = new HashSet<>();
+        for (RepositoryGroup group : groupRepository.findByUser(userId)) {
+            groupIds.add(group.getId());
+            for (RepositoryGroupMember member : groupMemberRepository.findByGroup(group.getId()))
+                groupsByLink.computeIfAbsent(member.getTrackedRepositoryId(), link -> new ArrayList<>()).add(group.getId());
+        }
+        boolean filtered = groupId != null && groupIds.contains(groupId);
+
+        List<RepositoryDTO> repositories = new ArrayList<>();
+        for (TrackedRepository link : trackedRepositoryRepository.findByUser(userId)) {
+            List<String> linkGroups = groupsByLink.getOrDefault(link.getId(), List.of());
+            if (filtered && !linkGroups.contains(groupId))
+                continue;
+            repositoryRepository.findById(link.getRepositoryId()).ifPresent(repository -> {
+                RepositoryDTO repositoryDTO = convertEntityToDTO(repository);
+                repositoryDTO.setGroupIds(new ArrayList<>(linkGroups));
+                repositories.add(repositoryDTO);
+            });
+        }
+        repositories.sort(Comparator.comparing(RepositoryDTO::getOwner).thenComparing(RepositoryDTO::getName));
+        return repositories;
+    }
+
+    /**
+     * Lists a user's repository groups.
+     *
+     * @param userId the user id
+     * @return the groups, sorted by name (case-insensitive)
+     */
+    public List<RepositoryGroupDTO> getGroups(String userId) {
+        return groupRepository.findByUser(userId).stream()
+                .map(group -> new RepositoryGroupDTO(group.getId(), group.getName()))
+                .sorted(Comparator.comparing(RepositoryGroupDTO::name, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
+
+    /**
+     * Creates a repository group for a user.
+     *
+     * @param userId the user id
+     * @param name   the group's name; surrounding spaces are dropped
+     * @return the new group
+     * @throws IllegalArgumentException if the name is empty, longer than
+     *                                  {@value #MAX_GROUP_NAME} characters, or
+     *                                  already used by one of the user's groups
+     */
+    public RepositoryGroupDTO createGroup(String userId, String name) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty() || trimmed.length() > MAX_GROUP_NAME)
+            throw new IllegalArgumentException("The group name must have 1 to " + MAX_GROUP_NAME + " characters");
+
+        RepositoryGroup group = new RepositoryGroup(UUID.randomUUID().toString(), userId, trimmed);
+        try {
+            groupRepository.create(group);
+        } catch (PersistenceException e) {
+            if (e.getReason() != PersistenceException.Reason.DUPLICATE)
+                throw e;
+            throw new IllegalArgumentException("A group named '" + trimmed + "' already exists");
+        }
+        log.info("Created group '{}'", trimmed);
+        return new RepositoryGroupDTO(group.getId(), group.getName());
+    }
+
+    /**
+     * Sets the groups one of a user's tracked repositories is in: it joins
+     * the given groups and leaves the others.
+     *
+     * @param userId   the user id
+     * @param owner    the repository owner
+     * @param name     the repository name
+     * @param groupIds the groups it must be in; {@code null} or empty for none
+     * @throws IllegalArgumentException if the user doesn't track the
+     *                                  repository, or a group isn't the user's
+     */
+    public void setGroups(String userId, String owner, String name, Collection<String> groupIds) {
+        TrackedRepository link = trackedLink(userId, owner, name)
+                .orElseThrow(() -> new IllegalArgumentException("Repository not tracked: " + owner + "/" + name));
+        Set<String> wanted = groupIds == null ? Set.of() : new HashSet<>(groupIds);
+        Set<String> owned = new HashSet<>();
+        groupRepository.findByUser(userId).forEach(group -> owned.add(group.getId()));
+        if (!owned.containsAll(wanted))
+            throw new IllegalArgumentException("Unknown group");
+
+        Set<String> current = new HashSet<>();
+        for (RepositoryGroupMember member : groupMemberRepository.findByTrackedRepository(link.getId())) {
+            if (wanted.contains(member.getGroupId()))
+                current.add(member.getGroupId());
+            else
+                groupMemberRepository.deleteById(member.getId());
+        }
+        for (String groupId : wanted) {
+            if (!current.contains(groupId))
+                groupMemberRepository.create(new RepositoryGroupMember(UUID.randomUUID().toString(), groupId, link.getId()));
+        }
+        log.info("Repository {}/{} is now in {} group(s)", owner, name, wanted.size());
     }
 
     /**
@@ -264,6 +396,21 @@ public class RepositoryService {
     private boolean isTrackedBy(String userId, String repositoryId) {
         return trackedRepositoryRepository.findByUser(userId).stream()
                 .anyMatch(link -> link.getRepositoryId().equals(repositoryId));
+    }
+
+    /**
+     * Finds a user's link to one of the repositories they track.
+     *
+     * @param userId the user id
+     * @param owner  the repository owner
+     * @param name   the repository name
+     * @return the link, or empty if the user doesn't track it
+     */
+    private Optional<TrackedRepository> trackedLink(String userId, String owner, String name) {
+        return repositoryRepository.findByOwnerAndName(owner, name)
+                .flatMap(repository -> trackedRepositoryRepository.findByUser(userId).stream()
+                        .filter(link -> link.getRepositoryId().equals(repository.getId()))
+                        .findFirst());
     }
 
     /**

@@ -3,6 +3,8 @@ package com.polemon.github_manager.config;
 import com.polemon.api_lib.persistence.IDatasource;
 import com.polemon.github_manager.model.entity.InternalWorkflowEntity;
 import com.polemon.github_manager.model.entity.RepositoryEntity;
+import com.polemon.github_manager.model.entity.RepositoryGroup;
+import com.polemon.github_manager.model.entity.RepositoryGroupMember;
 import com.polemon.github_manager.model.entity.TrackedRepository;
 import com.polemon.github_manager.model.entity.User;
 import com.polemon.postgresql.DatasourceManager;
@@ -69,6 +71,26 @@ public class DatasourceConfig {
     @Bean
     public IDatasource<TrackedRepository> trackedRepositoryDatasource() {
         return DatasourceManager.getInstance().getDatasource(url, username, password, TrackedRepository.class);
+    }
+
+    /**
+     * The datasource of the users' repository groups.
+     *
+     * @return the datasource of {@link RepositoryGroup}
+     */
+    @Bean
+    public IDatasource<RepositoryGroup> repositoryGroupDatasource() {
+        return DatasourceManager.getInstance().getDatasource(url, username, password, RepositoryGroup.class);
+    }
+
+    /**
+     * The datasource of which tracked repository is in which group.
+     *
+     * @return the datasource of {@link RepositoryGroupMember}
+     */
+    @Bean
+    public IDatasource<RepositoryGroupMember> repositoryGroupMemberDatasource() {
+        return DatasourceManager.getInstance().getDatasource(url, username, password, RepositoryGroupMember.class);
     }
 
     /**
