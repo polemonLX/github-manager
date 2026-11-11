@@ -27,7 +27,7 @@ class RepositoryEntityTest {
         repository.setBranches(List.of(new BranchDomain("main", "sha", true)));
         repository.setPullRequests(List.of(new PullRequestDomain(7, "title", "me", createdAt, "url")));
         repository.setReleases(List.of(new TagDomain("1.0.0", "sha", "zip")));
-        repository.setWorkflows(List.of(new WorkflowDomain(1, "release", "active", "path", "url")));
+        repository.setWorkflows(List.of(new WorkflowDomain(1, "release", "active", "path", "url", false)));
 
         RepositoryEntity read = mapper.readValue(mapper.writeValueAsString(repository), RepositoryEntity.class);
 

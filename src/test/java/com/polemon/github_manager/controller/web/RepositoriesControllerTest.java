@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -100,6 +101,42 @@ class RepositoriesControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(view().name("pages/repositories :: addRepoError"))
                 .andExpect(model().attribute("error", "A group named 'Apps' already exists"));
+    }
+
+    @Test
+    void deletesAnotherGroupKeepingTheFilter() throws Exception {
+        mvc.perform(post("/repositories/groups/delete").param("groupId", "g2").param("group", "g1").header("HX-Request", "true"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("pages/repositories :: content"))
+                .andExpect(model().attribute("selectedGroup", "g1"))
+                .andExpect(header().doesNotExist("HX-Push-Url"));
+
+        verify(repositoryService).deleteGroup("u1", "g2");
+        verify(repositoryService).getRepositories("u1", "g1");
+    }
+
+    @Test
+    void deletingTheGroupShownGoesBackToEveryRepository() throws Exception {
+        mvc.perform(post("/repositories/groups/delete").param("groupId", "g1").param("group", "g1").header("HX-Request", "true"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("selectedGroup", (Object) null))
+                .andExpect(header().string("HX-Push-Url", "/repositories"));
+
+        verify(repositoryService).deleteGroup("u1", "g1");
+        verify(repositoryService).getRepositories("u1", null);
+    }
+
+    @Test
+    void deletingAGroupWithoutAFilterShowsEveryRepository() throws Exception {
+        mvc.perform(post("/repositories/groups/delete").param("groupId", "g2"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("layouts/main"))
+                .andExpect(header().doesNotExist("HX-Push-Url"));
+        mvc.perform(post("/repositories/groups/delete").param("groupId", "g2").param("group", ""))
+                .andExpect(model().attribute("selectedGroup", (Object) null))
+                .andExpect(header().doesNotExist("HX-Push-Url"));
+
+        verify(repositoryService, times(2)).deleteGroup("u1", "g2");
     }
 
     @Test

@@ -6,12 +6,11 @@ import java.time.Instant;
 
 /**
  * Transfer object representing the runtime state of a single stage within an
- * actively executing internal workflow.
+ * internal workflow run.
  */
 @Getter
 @Setter
 @NoArgsConstructor
-@AllArgsConstructor
 @ToString
 public class InternalWorkflowStageActiveDTO {
 
@@ -24,8 +23,17 @@ public class InternalWorkflowStageActiveDTO {
     /** Additional details describing the stage's action, shown in the UI. */
     private String details;
 
-    /** Current execution status of the stage, e.g. {@code pending}, {@code running}, {@code done}. */
+    /** Where the stage is: {@code waiting}, {@code running}, {@code succeeded}, {@code failed} or {@code stopped}. */
     private String status;
+
+    /** Whether the stage runs together with the one before it ({@code WITH_PREVIOUS}). */
+    private boolean parallel;
+
+    /** For a pipeline stage, the URL of its run on GitHub once found; {@code null} otherwise. */
+    private String runUrl;
+
+    /** Why the stage failed; {@code null} unless it did. */
+    private String error;
 
     /** Instant this stage began executing. */
     private Instant startedAt;

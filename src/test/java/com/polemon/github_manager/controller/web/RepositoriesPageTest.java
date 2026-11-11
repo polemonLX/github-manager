@@ -69,6 +69,25 @@ class RepositoriesPageTest {
     }
 
     @Test
+    void eachGroupHasADeleteButtonKeepingTheFilter() {
+        String html = render("g1", List.of(new RepositoryGroupDTO("g1", "Apps"), new RepositoryGroupDTO("g2", "O'Libs")), List.of())
+                .replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("<button type=\"button\" class=\"group-delete\" hx-post=\"/repositories/groups/delete?groupId=g1&amp;group=g1\""));
+        assertTrue(html.contains("hx-post=\"/repositories/groups/delete?groupId=g2&amp;group=g1\""));
+        assertTrue(html.contains("hx-confirm=\"Delete the group &#39;Apps&#39;? Its repositories stay tracked.\""));
+        assertTrue(html.contains("title=\"Delete group O&#39;Libs\""));
+        assertTrue(html.contains("aria-label=\"Delete group Apps\""));
+    }
+
+    @Test
+    void withoutAFilterTheDeleteButtonSendsAnEmptyGroup() {
+        String html = render(null, List.of(new RepositoryGroupDTO("g1", "Apps")), List.of());
+
+        assertTrue(html.contains("hx-post=\"/repositories/groups/delete?groupId=g1&amp;group=\""));
+    }
+
+    @Test
     void marksTheSelectedGroupAndKeepsItInTheForms() {
         String html = render("g1", List.of(new RepositoryGroupDTO("g1", "Apps")), List.of());
 

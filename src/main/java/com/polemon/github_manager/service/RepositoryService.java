@@ -213,6 +213,26 @@ public class RepositoryService {
     }
 
     /**
+     * Deletes one of a user's groups. Its memberships go with it (the store
+     * cascades them); the repositories stay tracked. A group that doesn't
+     * exist or isn't the user's is left alone.
+     *
+     * @param userId  the user id
+     * @param groupId the group to delete
+     * @return {@code true} if a group was deleted
+     */
+    public boolean deleteGroup(String userId, String groupId) {
+        Optional<RepositoryGroup> group = groupId == null ? Optional.empty() : groupRepository.findById(groupId);
+        if (group.isEmpty() || !group.get().getUserId().equals(userId)) {
+            log.debug("Group {} not deleted: not one of the user's groups", groupId);
+            return false;
+        }
+        groupRepository.deleteById(groupId);
+        log.info("Deleted group '{}'", group.get().getName());
+        return true;
+    }
+
+    /**
      * Sets the groups one of a user's tracked repositories is in: it joins
      * the given groups and leaves the others.
      *
@@ -456,11 +476,12 @@ public class RepositoryService {
                 tag.setName(tagName.substring(1));
         }).sorted((t1, t2) -> t2.getName().compareTo(t1.getName())).toList();
 
+        List<WorkflowRunAPI> runsInProgress = gitHubClient.getActionsRunning(owner, name, token);
         repository.setReleases(convertTagAPIToDomain(tags));
-        repository.setActionsRunning(gitHubClient.getActionsRunning(owner, name, token).size());
+        repository.setActionsRunning(runsInProgress.size());
         repository.setPullRequests(convertPullRequestAPIToDomain(gitHubClient.getOpenPullRequests(owner, name, token)));
         repository.setBranches(convertBranchAPIToDomain(gitHubClient.getBranches(owner, name, token)));
-        repository.setWorkflows(convertWorkflowAPIToDomain(gitHubClient.getWorkflows(owner, name, token)));
+        repository.setWorkflows(convertWorkflowAPIToDomain(gitHubClient.getWorkflows(owner, name, token), runsInProgress));
         repository.setLastSyncedAt(System.currentTimeMillis());
 
         repositoryRepository.update(repository);
@@ -582,6 +603,7 @@ public class RepositoryService {
             workflowDTO.setName(workflowDomain.getName());
             workflowDTO.setUrl(workflowDomain.getUrl());
             workflowDTO.setState(workflowDomain.getState());
+            workflowDTO.setRunning(workflowDomain.isRunning());
             workflowDTOs.add(workflowDTO);
         }
         return workflowDTOs;
@@ -626,12 +648,17 @@ public class RepositoryService {
     }
 
     /**
-     * Converts a list of workflow API objects to domain objects.
+     * Converts a list of workflow API objects to domain objects, marking the
+     * ones with a run in progress.
      *
-     * @param workflows the API objects to convert
+     * @param workflows      the API objects to convert
+     * @param runsInProgress the repository's queued and in-progress runs
      * @return the corresponding domain objects
      */
-    private List<WorkflowDomain> convertWorkflowAPIToDomain(List<WorkflowAPI> workflows) {
+    private List<WorkflowDomain> convertWorkflowAPIToDomain(List<WorkflowAPI> workflows, List<WorkflowRunAPI> runsInProgress) {
+        Set<Long> running = new HashSet<>();
+        runsInProgress.forEach(run -> running.add(run.getWorkflowId()));
+
         List<WorkflowDomain> workflowDomains = new LinkedList<>();
         for (WorkflowAPI workflowAPI : workflows) {
             WorkflowDomain workflowDomain = new WorkflowDomain();
@@ -640,6 +667,7 @@ public class RepositoryService {
             workflowDomain.setState(workflowAPI.getState());
             workflowDomain.setPath(workflowAPI.getPath());
             workflowDomain.setUrl(workflowAPI.getUrl());
+            workflowDomain.setRunning(running.contains(workflowAPI.getId()));
             workflowDomains.add(workflowDomain);
         }
         return workflowDomains;

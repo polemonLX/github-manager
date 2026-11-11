@@ -77,6 +77,34 @@ public class RepositoriesController {
     }
 
     /**
+     * Deletes one of the caller's groups (only the group and its memberships;
+     * the repositories stay), then re-renders the repositories fragment. When
+     * the deleted group was the filter shown, the page goes back to all
+     * repositories and the browser's address follows ({@code HX-Push-Url}).
+     *
+     * @param identity  the caller, from auth's identity token
+     * @param model     the model to populate for rendering
+     * @param response  the HTTP response, for the {@code HX-Push-Url} header
+     * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
+     * @param groupId   the group to delete
+     * @param group     the group shown when the button was pressed, kept as the
+     *                  filter unless it is the one deleted
+     * @return the repositories content fragment or the full page layout
+     */
+    @PostMapping("/groups/delete")
+    public String deleteGroup(Identity identity, Model model, HttpServletResponse response,
+                              @RequestHeader(value = "HX-Request", required = false) String hxRequest,
+                              @RequestParam("groupId") String groupId,
+                              @RequestParam(value = "group", required = false) String group) {
+        repositoryService.deleteGroup(identity.userId(), groupId);
+        if (groupId.equals(group)) {
+            response.setHeader("HX-Push-Url", "/repositories");
+            return answerRequest(identity, model, hxRequest, null);
+        }
+        return answerRequest(identity, model, hxRequest, group);
+    }
+
+    /**
      * Saves the groups a repository is in, from the edit modal. On success
      * re-renders the repositories fragment; on failure responds {@code 400}
      * with an error fragment for the edit modal, which stays open.

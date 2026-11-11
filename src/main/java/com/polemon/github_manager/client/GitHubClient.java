@@ -57,7 +57,11 @@ public class GitHubClient {
     private final ObjectMapper mapper;
 
     public GitHubClient() {
-        this.restTemplate = new RestTemplate();
+        this(new RestTemplate());
+    }
+
+    GitHubClient(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
         this.mapper = new ObjectMapper();
     }
 
@@ -131,20 +135,55 @@ public class GitHubClient {
             if (root == null)
                 continue;
 
-            for (JsonNode node : root.path("workflow_runs")) {
-                runs.add(new WorkflowRunAPI(
-                        node.path("id").asLong(),
-                        node.path("name").asString(),
-                        node.path("status").asString(),
-                        textOrNull(node.path("conclusion")),
-                        node.path("head_branch").asString(),
-                        node.path("event").asString(),
-                        node.path("html_url").asString(),
-                        parseInstant(node.path("created_at"))
-                ));
-            }
+            for (JsonNode node : root.path("workflow_runs"))
+                runs.add(mapRun(node));
         }
         return runs;
+    }
+
+    /**
+     * Finds the run a {@code workflow_dispatch} created. GitHub answers a
+     * dispatch without the run, so the run is looked up afterwards: among the
+     * workflow's latest dispatched runs on the branch, the oldest one created
+     * at or after {@code since} (later ones were started by something else).
+     * One API call.
+     *
+     * @param owner            The repository owner
+     * @param name             The repository name
+     * @param workflowFileName The workflow file name, e.g. {@code ci.yml}
+     * @param branch           The branch the workflow was dispatched on
+     * @param since            When the dispatch was sent, minus some clock skew
+     * @return The run, or {@code null} if GitHub doesn't list it yet / on failure
+     */
+    public WorkflowRunAPI findDispatchedRun(String owner, String name, String workflowFileName, String branch, Instant since, String token) {
+        String path = String.format("/repos/%s/%s/actions/workflows/%s/runs?event=workflow_dispatch&branch=%s&per_page=10",
+                owner, name, workflowFileName, branch);
+        JsonNode root = fetchJson(path, token);
+        if (root == null)
+            return null;
+
+        WorkflowRunAPI found = null;
+        for (JsonNode node : root.path("workflow_runs")) {
+            WorkflowRunAPI run = mapRun(node);
+            if (run.getCreatedAt() == null || run.getCreatedAt().isBefore(since))
+                continue;
+            if (found == null || run.getCreatedAt().isBefore(found.getCreatedAt()))
+                found = run;
+        }
+        return found;
+    }
+
+    /**
+     * Fetches one workflow run, to follow it until it completes. One API call.
+     *
+     * @param owner The repository owner
+     * @param name  The repository name
+     * @param runId The run id
+     * @return The run, or {@code null} on failure
+     */
+    public WorkflowRunAPI getRun(String owner, String name, long runId, String token) {
+        JsonNode root = fetchJson(String.format("/repos/%s/%s/actions/runs/%d", owner, name, runId), token);
+        return root == null ? null : mapRun(root);
     }
 
     /**
@@ -363,6 +402,26 @@ public class GitHubClient {
         body.put("ref", ref);
 
         return sendJson(apiPath, HttpMethod.POST, body, token) != null;
+    }
+
+    /**
+     * Maps a workflow run JSON node.
+     *
+     * @param node The run node from the GitHub API
+     * @return The mapped run
+     */
+    private WorkflowRunAPI mapRun(JsonNode node) {
+        return new WorkflowRunAPI(
+                node.path("id").asLong(),
+                node.path("workflow_id").asLong(),
+                node.path("name").asString(),
+                node.path("status").asString(),
+                textOrNull(node.path("conclusion")),
+                node.path("head_branch").asString(),
+                node.path("event").asString(),
+                node.path("html_url").asString(),
+                parseInstant(node.path("created_at"))
+        );
     }
 
     /**

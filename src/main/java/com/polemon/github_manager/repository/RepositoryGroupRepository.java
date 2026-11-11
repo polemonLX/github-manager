@@ -51,4 +51,14 @@ public class RepositoryGroupRepository {
         datasource.create(group);
     }
 
+    /**
+     * Deletes a group; its memberships go with it (cascade), the tracked
+     * repositories stay.
+     *
+     * @param id the group id
+     */
+    public void deleteById(String id) {
+        datasource.deleteById(id);
+    }
+
 }

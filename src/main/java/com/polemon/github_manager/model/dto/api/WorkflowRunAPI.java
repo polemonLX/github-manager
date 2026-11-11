@@ -21,6 +21,11 @@ public class WorkflowRunAPI {
     private long id;
 
     /**
+     * GitHub's identifier of the workflow (Action) this run belongs to.
+     */
+    private long workflowId;
+
+    /**
      * Display name of the run (typically the workflow name).
      */
     private String name;

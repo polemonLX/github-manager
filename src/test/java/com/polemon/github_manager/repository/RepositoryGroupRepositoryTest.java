@@ -38,4 +38,11 @@ class RepositoryGroupRepositoryTest {
         verify(datasource).create(group);
     }
 
+    @Test
+    void deleteDelegates() {
+        repository.deleteById("g1");
+
+        verify(datasource).deleteById("g1");
+    }
+
 }

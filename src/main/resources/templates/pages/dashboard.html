@@ -33,50 +33,76 @@
     <section class="panel">
         <div class="panel-header">
             <h2 class="panel-title">Active Workflows</h2>
-            <span class="panel-subtitle">Custom release pipelines will show their live progress here</span>
+            <span class="panel-subtitle">Your workflow runs: what is running, finished or waiting to start</span>
         </div>
-        <div th:fragment="active-workflow-content" class="panel-body" hx-get="/dashboards/active-workflow/refresh"
+        <div th:fragment="active-workflow-content" id="activeWorkflows" class="panel-body"
+             hx-get="/dashboards/active-workflow/refresh"
              th:attr="hx-trigger='every ' + ${activeWorkflowRefreshIntervalSeconds ?: 10} + 's'"
              hx-swap="outerHTML">
             <div class="workflow-empty" th:if="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}">
                 <div class="workflow-empty-icon">⚙️</div>
                 <p class="workflow-empty-title">No workflows running</p>
-                <p class="workflow-empty-text">When a pipeline is running, its steps and status appear here in real time.</p>
+                <p class="workflow-empty-text">Start a workflow on the Workflows page: its stages and their status appear here as it runs.</p>
             </div>
 
-            <div th:unless="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}"
-                 class="workflow-card" th:each="activeWorkflow : ${activeWorkflows}">
+            <div class="aw-list" th:unless="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}">
+                <div class="aw-card" th:each="run : ${activeWorkflows}">
 
-                <div class="workflow-card-header">
-                    <div class="workflow-info">
-                        <span class="workflow-name" th:text="${activeWorkflow.workflowName}"></span>
-                        <span class="workflow-stage-count" th:text="${activeWorkflow.stageCount} + ' stage(s)'"></span>
+                    <div class="aw-header">
+                        <div class="workflow-info">
+                            <span class="workflow-name" th:text="${run.workflowName}">release</span>
+                            <span class="workflow-stage-count">
+                                <span th:text="${run.stageCount} + ' stage(s)'">3 stage(s)</span>
+                                <span th:if="${run.startedAtText != null}" th:text="' · started ' + ${run.startedAtText}"></span>
+                                <span th:if="${run.finishedAtText != null}" th:text="' · ended ' + ${run.finishedAtText}"></span>
+                            </span>
+                        </div>
+                        <span class="aw-status" th:classappend="${'aw-status-' + run.status}" th:switch="${run.status}">
+                            <th:block th:case="'waiting'">Waiting to start</th:block>
+                            <th:block th:case="'running'">Running</th:block>
+                            <th:block th:case="'succeeded'">Finished</th:block>
+                            <th:block th:case="'failed'">Failed</th:block>
+                            <th:block th:case="*">Stopped</th:block>
+                        </span>
+                        <button type="button" class="btn btn-small" th:if="${run.active}"
+                                th:hx-post="@{/dashboards/active-workflow/stop(workflowName=${run.workflowName})}"
+                                th:hx-confirm="|Stop the workflow '${run.workflowName}'? Pipelines already started keep running on GitHub.|"
+                                hx-target="#activeWorkflows" hx-swap="outerHTML">Stop</button>
+                        <button type="button" class="aw-dismiss" th:unless="${run.active}"
+                                th:hx-post="@{/dashboards/active-workflow/dismiss(workflowName=${run.workflowName})}"
+                                th:title="|Remove ${run.workflowName} from the list|"
+                                th:aria-label="|Remove ${run.workflowName} from the list|"
+                                hx-target="#activeWorkflows" hx-swap="outerHTML">&times;</button>
                     </div>
-                    <span class="wf-stage-detail" th:if="${activeWorkflow.startedAt != null}"
-                          th:text="'started ' + ${#temporals.format(activeWorkflow.startedAt, 'yyyy-MM-dd HH:mm')}"></span>
+
+                    <p class="aw-error" th:if="${run.error != null}" th:text="${run.error}">reason</p>
+
+                    <ol class="aw-stages">
+                        <li th:each="stage : ${run.stages}" class="aw-stage"
+                            th:classappend="${'aw-stage-' + stage.status}">
+                            <span class="aw-dot"></span>
+                            <span class="wf-stage-index" th:text="${stage.index + 1}">1</span>
+                            <div class="workflow-card-stage-text">
+                                <div class="wf-stage-title" th:text="${stage.title}">owner/repo - Pipeline</div>
+                                <div class="wf-stage-detail">
+                                    <span th:text="${stage.details}">pipeline: ci.yml</span>
+                                    <span class="aw-parallel" th:if="${stage.parallel}">· with previous</span>
+                                </div>
+                                <div class="aw-stage-error" th:if="${stage.error != null}" th:text="${stage.error}">reason</div>
+                            </div>
+                            <a class="aw-run-link" th:if="${stage.runUrl != null}" th:href="${stage.runUrl}"
+                               target="_blank" rel="noopener noreferrer">View run</a>
+                            <span class="aw-stage-status" th:switch="${stage.status}">
+                                <th:block th:case="'waiting'">Waiting</th:block>
+                                <th:block th:case="'running'">Running</th:block>
+                                <th:block th:case="'succeeded'">Done</th:block>
+                                <th:block th:case="'failed'">Failed</th:block>
+                                <th:block th:case="*">Stopped</th:block>
+                            </span>
+                        </li>
+                    </ol>
+
                 </div>
-
-                <ol class="workflow-card-stages">
-                    <li th:each="stage : ${activeWorkflow.stages}" class="workflow-card-stage">
-                        <span class="wf-stage-index" th:text="${stage.index}"></span>
-                        <div class="workflow-card-stage-text">
-                            <div class="wf-stage-title" th:text="${stage.title}"></div>
-                            <div class="wf-stage-detail" th:text="${stage.details}"></div>
-                        </div>
-                        <span class="lk-status-dot" th:classappend="${stage.status == 'success'} ? 'ok' : 'off'"></span>
-                    </li>
-                </ol>
-
-                <ol class="workflow-card-stages" th:if="${activeWorkflow.nextStages != null and not #lists.isEmpty(activeWorkflow.nextStages)}">
-                    <li th:each="stage : ${activeWorkflow.nextStages}" class="workflow-card-stage">
-                        <span class="wf-stage-index" th:text="${stage.index}"></span>
-                        <div class="workflow-card-stage-text">
-                            <div class="wf-stage-title" th:text="${stage.title}"></div>
-                            <div class="wf-stage-detail">Up next</div>
-                        </div>
-                    </li>
-                </ol>
-
             </div>
         </div>
     </section>
@@ -131,7 +157,7 @@
                             </td>
                             <td>
                                 <span th:if="${#lists.size(repo.actionsRunning) gt 0}" class="lk-badge lk-badge-active"
-                                      th:text="${repo.actionsRunning} + ' running'">running</span>
+                                      th:text="${#lists.size(repo.actionsRunning)} + ' running'">running</span>
                                 <span th:unless="${#lists.size(repo.actionsRunning) gt 0}" class="lk-badge">Idle</span>
                             </td>
                             <td class="lk-num" th:text="${#lists.size(repo.openPullRequests)}">0</td>
@@ -161,8 +187,10 @@
                                     <div th:if="${#lists.isEmpty(repo.workflows)}" class="lk-detail-empty">No workflows.</div>
                                     <a th:each="wf : ${repo.workflows}" class="lk-li lk-li-link"
                                        th:href="${wf.url}" target="_blank" rel="noopener noreferrer">
+                                        <!-- Green: a run in progress at the last sync; grey: idle; red: the Action is disabled -->
                                         <span class="lk-status-dot"
-                                              th:classappend="${wf.state == 'active'} ? 'ok' : 'off'"></span>
+                                              th:classappend="${wf.running} ? 'ok' : (${wf.state != 'active'} ? 'off' : '')"
+                                              th:title="${wf.running} ? 'Running' : (${wf.state != 'active'} ? 'Disabled' : 'Idle')"></span>
                                         <span class="lk-li-name" th:text="${wf.name}"></span>
                                     </a>
                                 </div>

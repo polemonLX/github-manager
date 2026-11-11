@@ -39,4 +39,11 @@ public class WorkflowDomain {
      */
     private String url;
 
+    /**
+     * Whether a run of this workflow was queued or in progress at the last
+     * sync. Stored with the repository's JSON, so older rows read as
+     * {@code false}.
+     */
+    private boolean running;
+
 }

@@ -4,20 +4,30 @@ import com.polemon.api_lib.persistence.exception.PersistenceException;
 import com.polemon.github_manager.client.GitHubClient;
 import com.polemon.github_manager.exceptions.InvalidWorkflowException;
 import com.polemon.github_manager.model.domain.InternalWorkflowActiveDomain;
+import com.polemon.github_manager.model.domain.InternalWorkflowActiveDomain.WorkflowStatus;
 import com.polemon.github_manager.model.domain.InternalWorkflowStageActiveDomain;
+import com.polemon.github_manager.model.domain.InternalWorkflowStageActiveDomain.StageStatus;
 import com.polemon.github_manager.model.domain.RepositoryDomain;
 import com.polemon.github_manager.model.dto.*;
 import com.polemon.github_manager.model.dto.api.FileContentAPI;
+import com.polemon.github_manager.model.dto.api.RateLimitAPI;
+import com.polemon.github_manager.model.dto.api.WorkflowRunAPI;
 import com.polemon.github_manager.model.entity.InternalWorkflowEntity;
 import com.polemon.github_manager.model.entity.InternalWorkflowStageEntity;
 import com.polemon.github_manager.repository.WorkflowRepository;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -26,6 +36,16 @@ import java.util.regex.Pattern;
  * This service provides methods to retrieve and persist internal workflows,
  * delegating storage to the {@link WorkflowRepository}, and runs them with the
  * GitHub token of the user who started them.
+ *
+ * <p>A run goes through its stages in groups (see
+ * {@link InternalWorkflowActiveDomain}): commits are made right away, and
+ * pipelines are dispatched and then followed on GitHub until their runs
+ * complete. Following a run costs API calls from the user's 5000 per hour, so
+ * GitHub is asked at most once per {@code github-manager.workflow.poll-interval}
+ * (30 s by default, about 120 calls per hour per pipeline), and only once per
+ * {@code slow-poll-interval} when fewer than {@code low-rate-limit} calls are
+ * left. The last run of each workflow stays listed, ended or not, until it is
+ * started again or dismissed.
  */
 @Service
 @Slf4j
@@ -49,13 +69,25 @@ public class WorkflowService {
             Pattern.compile("<version>\\s*(\\d+)\\.(\\d+)\\.(\\d+)([^<]*)</version>");
 
     /**
+     * How much earlier than the dispatch a run may say it was created, since
+     * GitHub's clock and ours differ slightly.
+     */
+    private static final Duration CLOCK_SKEW = Duration.ofSeconds(10);
+
+    /**
+     * Format of the run times shown on the dashboard.
+     */
+    private static final DateTimeFormatter TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy").withZone(ZoneId.systemDefault());
+
+    /**
      * Store for persisting and retrieving internal workflows.
      */
     private final WorkflowRepository workflowRepository;
 
     /**
      * Client for the GitHub API calls performed by workflow stages
-     * (commits and pipeline dispatches).
+     * (commits, pipeline dispatches and following their runs).
      */
     private final GitHubClient gitHubClient;
 
@@ -65,16 +97,55 @@ public class WorkflowService {
     private final AuthService authService;
 
     /**
-     * Active workflows per user id, each keyed by workflow name.
+     * How often GitHub is asked about the pipelines being followed.
      */
-    private final Map<String, Map<String, InternalWorkflowActiveWorker>> internalWorkflowActiveDomainMap;
+    private final Pacing pacing;
 
-    public WorkflowService(WorkflowRepository workflowRepository, GitHubClient gitHubClient, AuthService authService) {
+    /**
+     * Runs each workflow on its own thread.
+     */
+    private final Executor executor;
+
+    /**
+     * Waits between the checks on GitHub.
+     */
+    private final Sleeper sleeper;
+
+    /**
+     * Tells the time, for the stage and run instants.
+     */
+    private final Clock clock;
+
+    /**
+     * The last run of each workflow per user id, keyed by workflow name, in
+     * start order.
+     */
+    private final Map<String, Map<String, Worker>> internalWorkflowActiveDomainMap;
+
+    @Autowired
+    public WorkflowService(WorkflowRepository workflowRepository, GitHubClient gitHubClient, AuthService authService,
+                           @Value("${github-manager.workflow.first-check:10s}") Duration firstCheck,
+                           @Value("${github-manager.workflow.poll-interval:30s}") Duration pollInterval,
+                           @Value("${github-manager.workflow.slow-poll-interval:2m}") Duration slowPollInterval,
+                           @Value("${github-manager.workflow.low-rate-limit:500}") int lowRateLimit,
+                           @Value("${github-manager.workflow.run-lookup-timeout:5m}") Duration runLookupTimeout) {
+        this(workflowRepository, gitHubClient, authService,
+                new Pacing(firstCheck, pollInterval, slowPollInterval, lowRateLimit, runLookupTimeout),
+                task -> Thread.ofVirtual().name("workflow").start(task), Thread::sleep, Clock.systemUTC());
+    }
+
+    WorkflowService(WorkflowRepository workflowRepository, GitHubClient gitHubClient, AuthService authService,
+                    Pacing pacing, Executor executor, Sleeper sleeper, Clock clock) {
         this.workflowRepository = workflowRepository;
         this.gitHubClient = gitHubClient;
         this.authService = authService;
+        this.pacing = pacing;
+        this.executor = executor;
+        this.sleeper = sleeper;
+        this.clock = clock;
 
         this.internalWorkflowActiveDomainMap = new ConcurrentHashMap<>();
+        log.info("Pipelines checked every {} ({} below {} API calls left)", pacing.interval(), pacing.slowInterval(), pacing.lowRateLimit());
     }
 
     /**
@@ -162,16 +233,16 @@ public class WorkflowService {
     }
 
     /**
-     * Retrieves a user's currently active workflows.
+     * Retrieves the last run of each of a user's workflows, active or ended.
      *
      * @param userId the user id
-     * @return the list of active workflows
+     * @return the runs, in start order
      */
     public List<InternalWorkflowActiveDTO> getInternalWorkflowActiveList(String userId) {
-        Map<String, InternalWorkflowActiveWorker> active = activeWorkflowsOf(userId);
+        Map<String, Worker> active = activeWorkflowsOf(userId);
         synchronized (active) {
             return active.values().stream()
-                    .map(worker -> convertDomainToDto(worker.getInternalWorkflowActiveDomain()))
+                    .map(worker -> convertDomainToDto(worker.domain))
                     .toList();
         }
     }
@@ -180,38 +251,68 @@ public class WorkflowService {
      * Starts a workflow from the submitted definition, including the per-stage
      * runtime values entered in the start dialog. The workflow must exist among
      * the user's stored workflows; the submitted stages (with any start-time
-     * overrides) drive this run without changing what is persisted.
+     * overrides) drive this run without changing what is persisted. The run
+     * goes on in the background and replaces the previous run of the same
+     * workflow on the dashboard.
      *
      * @param userId   the user id
      * @param workflow the workflow name and its stages, as submitted by the start dialog
-     * @throws InvalidWorkflowException if the workflow is empty or the user has no workflow with the given name
+     * @throws InvalidWorkflowException if the workflow is empty, the user has no workflow with the given name,
+     *                                  or that workflow is still running
      */
     public void startWorkflow(String userId, InternalWorkflowDTO workflow) throws InvalidWorkflowException {
         if (workflow == null || workflow.getName() == null || workflow.getName().trim().isEmpty())
             throw new InvalidWorkflowException("Workflow name must not be empty");
+        if (workflow.getStages() == null || workflow.getStages().isEmpty())
+            throw new InvalidWorkflowException("Workflow must have at least one stage");
 
         String workflowName = workflow.getName();
-
         if (findByName(userId, workflowName).isEmpty())
             throw new InvalidWorkflowException("Internal workflow not found: " + workflowName);
 
-        InternalWorkflowActiveDomain internalWorkflowActiveDomain = convertEntityToDomain(convertDtoToEntity(workflow));
-
-        InternalWorkflowActiveWorker internalWorkflowActiveWorker = new InternalWorkflowActiveWorker(userId, workflowName, internalWorkflowActiveDomain);
-        activeWorkflowsOf(userId).put(workflowName, internalWorkflowActiveWorker);
-        internalWorkflowActiveWorker.start();
+        Worker worker = new Worker(userId, convertEntityToDomain(convertDtoToEntity(workflow)));
+        Map<String, Worker> active = activeWorkflowsOf(userId);
+        synchronized (active) {
+            Worker previous = active.get(workflowName);
+            if (previous != null && previous.domain.isActive())
+                throw new InvalidWorkflowException("Workflow '" + workflowName + "' is already running");
+            active.remove(workflowName);
+            active.put(workflowName, worker);
+        }
+        log.info("Starting workflow '{}' ({} stage(s))", workflowName, workflow.getStages().size());
+        executor.execute(worker::run);
     }
 
     /**
-     * Stops the user's workflow with the given name, if it is currently active.
+     * Stops the user's workflow with the given name, if it is running. The run
+     * stays listed as stopped; pipelines already dispatched go on on GitHub.
      *
      * @param userId       the user id
      * @param workflowName the name of the workflow to stop
      */
     public void stopWorkflow(String userId, String workflowName) {
-        InternalWorkflowActiveWorker worker = activeWorkflowsOf(userId).remove(workflowName);
-        if (worker != null)
+        Worker worker = activeWorkflowsOf(userId).get(workflowName);
+        if (worker != null && worker.domain.isActive())
             worker.stop();
+    }
+
+    /**
+     * Removes the user's ended run of a workflow from the list. A run that is
+     * still active stays (stop it first).
+     *
+     * @param userId       the user id
+     * @param workflowName the workflow name
+     * @return {@code true} if a run was removed
+     */
+    public boolean dismissWorkflow(String userId, String workflowName) {
+        Map<String, Worker> active = activeWorkflowsOf(userId);
+        synchronized (active) {
+            Worker worker = active.get(workflowName);
+            if (worker == null || worker.domain.isActive())
+                return false;
+            active.remove(workflowName);
+            return true;
+        }
     }
 
     /**
@@ -228,28 +329,165 @@ public class WorkflowService {
     }
 
     /**
-     * The active workflows of a user, created empty on first use.
+     * The workflow runs of a user, created empty on first use.
      *
      * @param userId the user id
-     * @return the user's active workflows, keyed by workflow name, in start order
+     * @return the user's runs, keyed by workflow name, in start order
      */
-    private Map<String, InternalWorkflowActiveWorker> activeWorkflowsOf(String userId) {
+    private Map<String, Worker> activeWorkflowsOf(String userId) {
         return internalWorkflowActiveDomainMap.computeIfAbsent(userId, id -> Collections.synchronizedMap(new LinkedHashMap<>()));
     }
 
     /**
-     * Converts an {@link InternalWorkflowActiveDomain} to its DTO representation.
+     * Executes a commit stage: reads the target file, applies the stage's commit
+     * operation to its content and commits the result back through the GitHub
+     * contents API. Setting the content of a missing file creates it (a commit
+     * without a SHA).
      *
-     * @param workflowActiveDomain the domain object to convert
+     * @param stage the commit stage to execute
+     * @param token the GitHub token to authenticate with
+     * @throws IllegalStateException if the stage is incomplete, the file cannot
+     *                               be read, or the commit is rejected
+     */
+    private void executeCommitStage(InternalWorkflowStageActiveDomain stage, String token) {
+        RepositoryDomain repository = stage.getRepository();
+        if (repository == null)
+            throw new IllegalStateException("Commit stage has no repository");
+        if (stage.getCommitOperation() == null)
+            throw new IllegalStateException("Commit stage has no commit operation");
+
+        String owner = repository.getOwner();
+        String name = repository.getName();
+        String branch = stage.getTargetBranch();
+
+        String filePath = stage.getCommitFilePath();
+        if (filePath == null || filePath.trim().isEmpty()) {
+            if (stage.getCommitOperation() == InternalWorkflowStageActiveDomain.CommitOperation.BUMP_MAVEN_VERSION)
+                filePath = DEFAULT_POM_PATH;
+            else
+                throw new IllegalStateException("Commit stage has no file path");
+        }
+
+        FileContentAPI file = gitHubClient.getFileContent(owner, name, filePath, branch, token);
+
+        String newContent;
+        switch (stage.getCommitOperation()) {
+            case BUMP_MAVEN_VERSION -> {
+                if (file == null)
+                    throw new IllegalStateException("File not found: " + filePath + " in " + owner + "/" + name);
+                newContent = bumpMavenVersion(file.content(), stage.getVersionPart());
+            }
+            case FIND_AND_REPLACE_REGEX -> {
+                if (file == null)
+                    throw new IllegalStateException("File not found: " + filePath + " in " + owner + "/" + name);
+                newContent = file.content().replaceAll(stage.getCommitFindRegex(), stage.getCommitContent());
+            }
+            default -> newContent = stage.getCommitContent();
+        }
+
+        String message = stage.getCommitMessage();
+        if (message == null || message.trim().isEmpty())
+            message = "Update " + filePath;
+
+        boolean committed = gitHubClient.updateFileContent(owner, name, filePath, branch, newContent, message, file == null ? null : file.sha(), token);
+        if (!committed)
+            throw new IllegalStateException("Failed to commit " + filePath + " to " + owner + "/" + name);
+    }
+
+    /**
+     * Executes a pipeline stage by dispatching a {@code workflow_dispatch} event
+     * for the stage's workflow file on its target branch.
+     *
+     * @param stage the pipeline stage to execute
+     * @param token the GitHub token to authenticate with
+     * @throws IllegalStateException if the stage is incomplete or the dispatch is rejected
+     */
+    private void executeWorkflowStage(InternalWorkflowStageActiveDomain stage, String token) {
+        RepositoryDomain repository = stage.getRepository();
+        if (repository == null)
+            throw new IllegalStateException("Pipeline stage has no repository");
+
+        String workflowFileName = extractWorkflowFileName(stage.getWorkflowUrl());
+        if (!gitHubClient.dispatchWorkflow(repository.getOwner(), repository.getName(), workflowFileName, refOf(stage), token))
+            throw new IllegalStateException("Failed to dispatch pipeline " + workflowFileName + " on " + repository.getOwner() + "/" + repository.getName());
+    }
+
+    /**
+     * Asks GitHub how a dispatched pipeline is doing: first which run the
+     * dispatch created, then that run's state. One API call.
+     *
+     * @param stage the pipeline stage, running
+     * @param token the GitHub token to authenticate with
+     * @return {@code true} once its run succeeded; {@code false} while it is
+     *         queued or running, not listed yet, or GitHub didn't answer
+     * @throws IllegalStateException if the run ended without success, or no run
+     *                               showed up within the lookup timeout
+     */
+    private boolean checkPipeline(InternalWorkflowStageActiveDomain stage, String token) {
+        String owner = stage.getRepository().getOwner();
+        String name = stage.getRepository().getName();
+        String workflowFileName = extractWorkflowFileName(stage.getWorkflowUrl());
+
+        WorkflowRunAPI run;
+        if (stage.getRunId() == null) {
+            run = gitHubClient.findDispatchedRun(owner, name, workflowFileName, refOf(stage), stage.getStartedAt().minus(CLOCK_SKEW), token);
+            if (run == null) {
+                if (Duration.between(stage.getStartedAt(), clock.instant()).compareTo(pacing.runLookupTimeout()) > 0)
+                    throw new IllegalStateException("No run of " + workflowFileName + " showed up on " + owner + "/" + name);
+                return false;
+            }
+            stage.setRunId(run.getId());
+            stage.setRunUrl(run.getUrl());
+            log.debug("Pipeline {} on {}/{} is run {}", workflowFileName, owner, name, run.getId());
+        } else {
+            run = gitHubClient.getRun(owner, name, stage.getRunId(), token);
+            if (run == null)
+                return false;
+        }
+
+        if (!"completed".equals(run.getStatus()))
+            return false;
+        if (!"success".equals(run.getConclusion()))
+            throw new IllegalStateException("Pipeline " + workflowFileName + " on " + owner + "/" + name + " ended with " + run.getConclusion());
+        return true;
+    }
+
+    /**
+     * How long to wait before the next check on GitHub: the usual interval,
+     * or the slow one when the user's API calls run low. Reading the rate
+     * limit costs no call.
+     *
+     * @param token the GitHub token the checks use
+     * @return the wait
+     */
+    private Duration nextCheckIn(String token) {
+        RateLimitAPI rateLimit = gitHubClient.getRateLimit(token);
+        if (rateLimit != null && rateLimit.remaining() < pacing.lowRateLimit()) {
+            log.debug("{} GitHub API calls left, checking pipelines every {}", rateLimit.remaining(), pacing.slowInterval());
+            return pacing.slowInterval();
+        }
+        return pacing.interval();
+    }
+
+    /**
+     * Converts a workflow run to its DTO representation.
+     *
+     * @param workflowActiveDomain the run to convert
      * @return the corresponding DTO
      */
     private InternalWorkflowActiveDTO convertDomainToDto(InternalWorkflowActiveDomain workflowActiveDomain) {
         InternalWorkflowActiveDTO internalWorkflowActiveDTO = new InternalWorkflowActiveDTO();
         internalWorkflowActiveDTO.setWorkflowName(workflowActiveDomain.getWorkflowName());
+        internalWorkflowActiveDTO.setStatus(workflowActiveDomain.getStatus().name().toLowerCase(Locale.ROOT));
+        internalWorkflowActiveDTO.setActive(workflowActiveDomain.isActive());
+        internalWorkflowActiveDTO.setStageCount(workflowActiveDomain.getStages().size());
         internalWorkflowActiveDTO.setStages(convertStageDomainToDto(workflowActiveDomain.getStages()));
         internalWorkflowActiveDTO.setCurrentStages(convertStageDomainToDto(workflowActiveDomain.getCurrentStages()));
         internalWorkflowActiveDTO.setNextStages(convertStageDomainToDto(workflowActiveDomain.getNextStages()));
         internalWorkflowActiveDTO.setStartedAt(workflowActiveDomain.getStartedAt());
+        internalWorkflowActiveDTO.setStartedAtText(format(workflowActiveDomain.getStartedAt()));
+        internalWorkflowActiveDTO.setFinishedAtText(format(workflowActiveDomain.getFinishedAt()));
+        internalWorkflowActiveDTO.setError(workflowActiveDomain.getError());
         internalWorkflowActiveDTO.setExpectedCompletionTimeSeconds(workflowActiveDomain.getExpectedCompletionTimeSeconds());
         return internalWorkflowActiveDTO;
     }
@@ -360,7 +598,11 @@ public class WorkflowService {
             internalWorkflowStageActiveDTO.setIndex(internalWorkflowStageActiveDomain.getIndex());
             internalWorkflowStageActiveDTO.setTitle(buildStageTitle(internalWorkflowStageActiveDomain));
             internalWorkflowStageActiveDTO.setDetails(buildStageDetails(internalWorkflowStageActiveDomain));
-            internalWorkflowStageActiveDTO.setStatus(internalWorkflowStageActiveDomain.getStartedAt() == null ? "pending" : "running");
+            internalWorkflowStageActiveDTO.setStatus(internalWorkflowStageActiveDomain.getStatus().name().toLowerCase(Locale.ROOT));
+            internalWorkflowStageActiveDTO.setParallel(internalWorkflowStageActiveDomain.getIndex() > 0
+                    && internalWorkflowStageActiveDomain.getRunMode() == InternalWorkflowStageActiveDomain.RunMode.WITH_PREVIOUS);
+            internalWorkflowStageActiveDTO.setRunUrl(internalWorkflowStageActiveDomain.getRunUrl());
+            internalWorkflowStageActiveDTO.setError(internalWorkflowStageActiveDomain.getError());
             internalWorkflowStageActiveDTO.setStartedAt(internalWorkflowStageActiveDomain.getStartedAt());
             internalWorkflowStageActiveDTO.setExpectedDurationSeconds(internalWorkflowStageActiveDomain.getExpectedDurationSeconds());
             internalWorkflowStageActiveDTOS.add(internalWorkflowStageActiveDTO);
@@ -424,9 +666,128 @@ public class WorkflowService {
     }
 
     /**
-     * Worker that drives the execution of a single active internal workflow on a background thread.
+     * The ref a pipeline stage is dispatched on.
+     *
+     * @param stage the pipeline stage
+     * @return its target branch, or {@value #DEFAULT_BRANCH} when it has none
      */
-    private class InternalWorkflowActiveWorker {
+    private static String refOf(InternalWorkflowStageActiveDomain stage) {
+        return stage.getTargetBranch() == null || stage.getTargetBranch().trim().isEmpty()
+                ? DEFAULT_BRANCH
+                : stage.getTargetBranch();
+    }
+
+    /**
+     * Extracts the workflow file name (e.g. {@code ci.yml}) from a stage's
+     * workflow URL or path, which is the identifier the dispatch endpoint expects.
+     *
+     * @param workflowUrl the workflow URL or path stored on the stage
+     * @return the workflow file name
+     * @throws IllegalStateException if the URL is missing or has no file segment
+     */
+    private static String extractWorkflowFileName(String workflowUrl) {
+        if (workflowUrl == null || workflowUrl.trim().isEmpty())
+            throw new IllegalStateException("Pipeline stage has no workflow URL");
+
+        String fileName = workflowUrl.substring(workflowUrl.lastIndexOf('/') + 1);
+        if (fileName.isEmpty())
+            throw new IllegalStateException("Cannot extract workflow file name from: " + workflowUrl);
+        return fileName;
+    }
+
+    /**
+     * Bumps the project version in a {@code pom.xml} by the requested component,
+     * resetting the lower components (a minor bump zeroes the patch, a major bump
+     * zeroes both) and preserving any qualifier suffix (e.g. {@code -SNAPSHOT}).
+     * Versions inside the {@code <parent>} block are skipped so the parent
+     * reference is left untouched.
+     *
+     * @param pomContent  the current content of the pom.xml
+     * @param versionPart which component to increment; {@code null} means patch
+     * @return the content with the version bumped
+     * @throws IllegalStateException if no version tag can be found
+     */
+    private static String bumpMavenVersion(String pomContent, InternalWorkflowStageActiveDomain.VersionPart versionPart) {
+        InternalWorkflowStageActiveDomain.VersionPart part =
+                versionPart == null ? InternalWorkflowStageActiveDomain.VersionPart.PATCH : versionPart;
+
+        int parentStart = pomContent.indexOf("<parent>");
+        int parentEnd = pomContent.indexOf("</parent>");
+
+        Matcher matcher = MAVEN_VERSION_PATTERN.matcher(pomContent);
+        while (matcher.find()) {
+            if (parentStart >= 0 && matcher.start() > parentStart && matcher.start() < parentEnd)
+                continue;
+
+            int major = Integer.parseInt(matcher.group(1));
+            int minor = Integer.parseInt(matcher.group(2));
+            int patch = Integer.parseInt(matcher.group(3));
+            switch (part) {
+                case MAJOR -> {
+                    major++;
+                    minor = 0;
+                    patch = 0;
+                }
+                case MINOR -> {
+                    minor++;
+                    patch = 0;
+                }
+                case PATCH -> patch++;
+            }
+
+            String bumped = "<version>" + major + "." + minor + "." + patch + matcher.group(4) + "</version>";
+            return new StringBuilder(pomContent).replace(matcher.start(), matcher.end(), bumped).toString();
+        }
+        throw new IllegalStateException("No Maven version found to bump");
+    }
+
+    /**
+     * Formats a run instant for the dashboard.
+     *
+     * @param instant the instant, if any
+     * @return the text, or {@code null} without an instant
+     */
+    private static String format(Instant instant) {
+        return instant == null ? null : TIME_FORMATTER.format(instant);
+    }
+
+    /**
+     * How often GitHub is asked about dispatched pipelines.
+     *
+     * @param firstCheck       wait after the dispatches before the first check
+     *                         (GitHub needs a moment to list the run)
+     * @param interval         wait between checks
+     * @param slowInterval     wait between checks when API calls run low
+     * @param lowRateLimit     fewer API calls left than this means "low"
+     * @param runLookupTimeout how long a dispatched run may take to show up
+     *                         before the stage fails
+     */
+    record Pacing(Duration firstCheck, Duration interval, Duration slowInterval, int lowRateLimit, Duration runLookupTimeout) {
+    }
+
+    /**
+     * Waits for a while; {@link Thread#sleep(Duration)} outside tests.
+     */
+    @FunctionalInterface
+    interface Sleeper {
+
+        /**
+         * Waits.
+         *
+         * @param duration how long
+         * @throws InterruptedException if the workflow was stopped meanwhile
+         */
+        void sleep(Duration duration) throws InterruptedException;
+
+    }
+
+    /**
+     * Runs one workflow on a background thread: its stages group by group, a
+     * group's pipelines followed on GitHub until they all succeed. A failing
+     * stage fails the run and the stages after it don't start; stopping
+     * interrupts the wait.
+     */
+    private final class Worker {
 
         /**
          * The user who started the workflow, whose GitHub token it runs with.
@@ -434,251 +795,174 @@ public class WorkflowService {
         private final String userId;
 
         /**
-         * The name of the workflow being executed.
-         */
-        private final String workflowName;
-
-        /**
          * The runtime state of the workflow being executed.
          */
-        @Getter
-        private final InternalWorkflowActiveDomain internalWorkflowActiveDomain;
+        private final InternalWorkflowActiveDomain domain;
 
         /**
-         * The background thread running this worker.
+         * The thread running the workflow, while it runs.
          */
-        private final Thread workerThread;
+        private volatile Thread thread;
 
-        public InternalWorkflowActiveWorker(String userId, String workflowName, InternalWorkflowActiveDomain internalWorkflowActiveDomain) {
+        /**
+         * Whether the user asked to stop.
+         */
+        private volatile boolean stopRequested;
+
+        private Worker(String userId, InternalWorkflowActiveDomain domain) {
             this.userId = userId;
-            this.workflowName = workflowName;
-            this.internalWorkflowActiveDomain = internalWorkflowActiveDomain;
-            this.workerThread = new Thread(this::runWorkflow);
+            this.domain = domain;
         }
 
         /**
-         * Starts the worker thread to begin executing the workflow.
+         * Runs the workflow to its end: succeeded, failed or stopped.
          */
-        public void start() {
-            workerThread.start();
-        }
-
-        /**
-         * Interrupts the worker thread, stopping workflow execution.
-         */
-        public void stop() {
-            workerThread.interrupt();
-        }
-
-        /**
-         * Executes the workflow stages in sequence on the worker thread.
-         * Stages are consumed from the domain's stage queue until none remain.
-         */
-        private void runWorkflow() {
+        private void run() {
+            thread = Thread.currentThread();
+            domain.start(clock.instant());
+            String name = domain.getWorkflowName();
             try {
                 while (true) {
-                    List<InternalWorkflowStageActiveDomain> nextActiveStages = new LinkedList<>();
-                    while (true) {
-                        InternalWorkflowStageActiveDomain internalWorkflowStageActive = internalWorkflowActiveDomain.nextStage();
-                        if (internalWorkflowStageActive == null)
-                            break;
-                        nextActiveStages.add(internalWorkflowStageActive);
-                    }
-
-                    if (nextActiveStages.isEmpty())
+                    checkStopped();
+                    List<InternalWorkflowStageActiveDomain> group = new ArrayList<>();
+                    for (InternalWorkflowStageActiveDomain stage = domain.nextStage(); stage != null; stage = domain.nextStage())
+                        group.add(stage);
+                    if (group.isEmpty())
                         break;
 
-                    executeStages(nextActiveStages);
-                    waitForStagesCompletion(nextActiveStages);
-                    internalWorkflowActiveDomain.clearCurrentStages();
+                    runGroup(group);
+                    domain.clearCurrentStages();
                 }
-            } catch (Exception e) {
-                log.error("Error while executing workflow: {}", workflowName, e);
+                domain.finish(WorkflowStatus.SUCCEEDED, null, clock.instant());
+                log.info("Workflow '{}' succeeded", name);
+            } catch (InterruptedException e) {
+                endUnfinishedStages();
+                domain.finish(WorkflowStatus.STOPPED, "Stopped by the user", clock.instant());
+                log.info("Workflow '{}' stopped", name);
+            } catch (RuntimeException e) {
+                endUnfinishedStages();
+                domain.finish(WorkflowStatus.FAILED, e.getMessage(), clock.instant());
+                log.warn("Workflow '{}' failed: {}", name, e.getMessage());
+            } finally {
+                thread = null;
             }
         }
 
         /**
-         * Executes the given stages: commit stages are committed through the GitHub
-         * contents API and pipeline stages are dispatched as {@code workflow_dispatch}
-         * events. Each stage's start instant is recorded as it begins. A stage that
-         * cannot be executed aborts the workflow by propagating an exception to
-         * {@link #runWorkflow()}.
-         *
-         * @param nextActiveStages the stages to execute
+         * Stops the workflow: interrupts its wait, or makes it stop before
+         * its next step.
          */
-        private void executeStages(List<InternalWorkflowStageActiveDomain> nextActiveStages) {
-            String token = authService.getGithubToken(userId);
+        private void stop() {
+            stopRequested = true;
+            Thread running = thread;
+            if (running != null)
+                running.interrupt();
+        }
 
-            for (InternalWorkflowStageActiveDomain stage : nextActiveStages) {
-                stage.setStartedAt(Instant.now());
+        /**
+         * Runs a group of stages: starts them all, then waits until its
+         * pipelines' runs have succeeded.
+         *
+         * @param group the stages, in order
+         * @throws InterruptedException if the workflow is stopped
+         * @throws IllegalStateException if a stage fails
+         */
+        private void runGroup(List<InternalWorkflowStageActiveDomain> group) throws InterruptedException {
+            String token = authService.getGithubToken(userId);
+            for (InternalWorkflowStageActiveDomain stage : group) {
+                checkStopped();
+                startStage(stage, token);
+            }
+            waitForPipelines(group, token);
+        }
+
+        /**
+         * Starts a stage: a commit is made and ends it; a pipeline is
+         * dispatched and stays running until its run completes.
+         *
+         * @param stage the stage
+         * @param token the GitHub token to authenticate with
+         * @throws IllegalStateException if the stage can't be executed (the
+         *                               stage is marked failed)
+         */
+        private void startStage(InternalWorkflowStageActiveDomain stage, String token) {
+            stage.setStartedAt(clock.instant());
+            stage.setStatus(StageStatus.RUNNING);
+            try {
                 if (stage.getTask() == InternalWorkflowStageActiveDomain.StageTask.COMMIT) {
                     executeCommitStage(stage, token);
+                    stage.finish(StageStatus.SUCCEEDED, null, clock.instant());
                 } else if (stage.getTask() == InternalWorkflowStageActiveDomain.StageTask.WORKFLOW) {
                     executeWorkflowStage(stage, token);
+                } else {
+                    throw new IllegalStateException("Stage " + stage.getIndex() + " has no task");
                 }
+            } catch (RuntimeException e) {
+                stage.finish(StageStatus.FAILED, e.getMessage(), clock.instant());
+                throw e;
             }
         }
 
         /**
-         * Executes a commit stage: reads the target file, applies the stage's commit
-         * operation to its content and commits the result back through the GitHub
-         * contents API. Setting the content of a missing file creates it (a commit
-         * without a SHA).
+         * Follows the group's dispatched pipelines on GitHub until every run
+         * has succeeded, checking at the pace set by {@link Pacing}.
          *
-         * @param stage the commit stage to execute
+         * @param group the group's stages
          * @param token the GitHub token to authenticate with
-         * @throws IllegalStateException if the stage is incomplete, the file cannot
-         *                               be read, or the commit is rejected
+         * @throws InterruptedException  if the workflow is stopped
+         * @throws IllegalStateException if a run doesn't succeed (its stage is
+         *                               marked failed)
          */
-        private void executeCommitStage(InternalWorkflowStageActiveDomain stage, String token) {
-            RepositoryDomain repository = stage.getRepository();
-            if (repository == null)
-                throw new IllegalStateException("Commit stage has no repository");
-            if (stage.getCommitOperation() == null)
-                throw new IllegalStateException("Commit stage has no commit operation");
+        private void waitForPipelines(List<InternalWorkflowStageActiveDomain> group, String token) throws InterruptedException {
+            List<InternalWorkflowStageActiveDomain> running = new ArrayList<>(group.stream()
+                    .filter(stage -> stage.getStatus() == StageStatus.RUNNING)
+                    .toList());
+            if (running.isEmpty())
+                return;
 
-            String owner = repository.getOwner();
-            String name = repository.getName();
-            String branch = stage.getTargetBranch();
-
-            String filePath = stage.getCommitFilePath();
-            if (filePath == null || filePath.trim().isEmpty()) {
-                if (stage.getCommitOperation() == InternalWorkflowStageActiveDomain.CommitOperation.BUMP_MAVEN_VERSION)
-                    filePath = DEFAULT_POM_PATH;
-                else
-                    throw new IllegalStateException("Commit stage has no file path");
-            }
-
-            FileContentAPI file = gitHubClient.getFileContent(owner, name, filePath, branch, token);
-
-            String newContent;
-            switch (stage.getCommitOperation()) {
-                case BUMP_MAVEN_VERSION -> {
-                    if (file == null)
-                        throw new IllegalStateException("File not found: " + filePath + " in " + owner + "/" + name);
-                    newContent = bumpMavenVersion(file.content(), stage.getVersionPart());
-                }
-                case FIND_AND_REPLACE_REGEX -> {
-                    if (file == null)
-                        throw new IllegalStateException("File not found: " + filePath + " in " + owner + "/" + name);
-                    newContent = file.content().replaceAll(stage.getCommitFindRegex(), stage.getCommitContent());
-                }
-                case SET_FILE_CONTENT -> newContent = stage.getCommitContent();
-                default ->
-                        throw new IllegalStateException("Unsupported commit operation: " + stage.getCommitOperation());
-            }
-
-            String message = stage.getCommitMessage();
-            if (message == null || message.trim().isEmpty())
-                message = "Update " + filePath;
-
-            boolean committed = gitHubClient.updateFileContent(owner, name, filePath, branch, newContent, message, file == null ? null : file.sha(), token);
-            if (!committed)
-                throw new IllegalStateException("Failed to commit " + filePath + " to " + owner + "/" + name);
-        }
-
-        /**
-         * Executes a pipeline stage by dispatching a {@code workflow_dispatch} event
-         * for the stage's workflow file on its target branch.
-         *
-         * @param stage the pipeline stage to execute
-         * @param token the GitHub token to authenticate with
-         * @throws IllegalStateException if the stage is incomplete or the dispatch is rejected
-         */
-        private void executeWorkflowStage(InternalWorkflowStageActiveDomain stage, String token) {
-            RepositoryDomain repository = stage.getRepository();
-            if (repository == null)
-                throw new IllegalStateException("Pipeline stage has no repository");
-
-            String owner = repository.getOwner();
-            String name = repository.getName();
-            String workflowFileName = extractWorkflowFileName(stage.getWorkflowUrl());
-            String ref = stage.getTargetBranch() == null || stage.getTargetBranch().trim().isEmpty()
-                    ? DEFAULT_BRANCH
-                    : stage.getTargetBranch();
-
-            if (!gitHubClient.dispatchWorkflow(owner, name, workflowFileName, ref, token))
-                throw new IllegalStateException("Failed to dispatch pipeline " + workflowFileName + " on " + owner + "/" + name);
-        }
-
-        /**
-         * Extracts the workflow file name (e.g. {@code ci.yml}) from a stage's
-         * workflow URL or path, which is the identifier the dispatch endpoint expects.
-         *
-         * @param workflowUrl the workflow URL or path stored on the stage
-         * @return the workflow file name
-         * @throws IllegalStateException if the URL is missing or has no file segment
-         */
-        private String extractWorkflowFileName(String workflowUrl) {
-            if (workflowUrl == null || workflowUrl.trim().isEmpty())
-                throw new IllegalStateException("Pipeline stage has no workflow URL");
-
-            String fileName = workflowUrl.substring(workflowUrl.lastIndexOf('/') + 1);
-            if (fileName.isEmpty())
-                throw new IllegalStateException("Cannot extract workflow file name from: " + workflowUrl);
-            return fileName;
-        }
-
-        /**
-         * Bumps the project version in a {@code pom.xml} by the requested component,
-         * resetting the lower components (a minor bump zeroes the patch, a major bump
-         * zeroes both) and preserving any qualifier suffix (e.g. {@code -SNAPSHOT}).
-         * Versions inside the {@code <parent>} block are skipped so the parent
-         * reference is left untouched.
-         *
-         * @param pomContent  the current content of the pom.xml
-         * @param versionPart which component to increment; {@code null} means patch
-         * @return the content with the version bumped
-         * @throws IllegalStateException if no version tag can be found
-         */
-        private String bumpMavenVersion(String pomContent, InternalWorkflowStageActiveDomain.VersionPart versionPart) {
-            InternalWorkflowStageActiveDomain.VersionPart part =
-                    versionPart == null ? InternalWorkflowStageActiveDomain.VersionPart.PATCH : versionPart;
-
-            int parentStart = pomContent.indexOf("<parent>");
-            int parentEnd = pomContent.indexOf("</parent>");
-
-            Matcher matcher = MAVEN_VERSION_PATTERN.matcher(pomContent);
-            while (matcher.find()) {
-                if (parentStart >= 0 && matcher.start() > parentStart && matcher.start() < parentEnd)
-                    continue;
-
-                int major = Integer.parseInt(matcher.group(1));
-                int minor = Integer.parseInt(matcher.group(2));
-                int patch = Integer.parseInt(matcher.group(3));
-                switch (part) {
-                    case MAJOR -> {
-                        major++;
-                        minor = 0;
-                        patch = 0;
+            sleeper.sleep(pacing.firstCheck());
+            while (true) {
+                checkStopped();
+                Iterator<InternalWorkflowStageActiveDomain> stages = running.iterator();
+                while (stages.hasNext()) {
+                    InternalWorkflowStageActiveDomain stage = stages.next();
+                    boolean succeeded;
+                    try {
+                        succeeded = checkPipeline(stage, token);
+                    } catch (RuntimeException e) {
+                        stage.finish(StageStatus.FAILED, e.getMessage(), clock.instant());
+                        throw e;
                     }
-                    case MINOR -> {
-                        minor++;
-                        patch = 0;
-                    }
-                    case PATCH -> patch++;
-                }
-
-                String bumped = "<version>" + major + "." + minor + "." + patch + matcher.group(4) + "</version>";
-                return new StringBuilder(pomContent).replace(matcher.start(), matcher.end(), bumped).toString();
-            }
-            throw new IllegalStateException("No Maven version found to bump");
-        }
-
-        /**
-         * Waits for the given stages to complete (placeholder; not yet implemented).
-         *
-         * @param stages the stages to wait for
-         */
-        private void waitForStagesCompletion(List<InternalWorkflowStageActiveDomain> stages) throws InterruptedException {
-            boolean isFinished = false;
-            while (!isFinished) {
-                Thread.sleep(3000);
-                for (InternalWorkflowStageActiveDomain stage : stages) {
-                    if (stage.getTask() == InternalWorkflowStageActiveDomain.StageTask.WORKFLOW) {
-
+                    if (succeeded) {
+                        stage.finish(StageStatus.SUCCEEDED, null, clock.instant());
+                        stages.remove();
                     }
                 }
+                if (running.isEmpty())
+                    return;
+                sleeper.sleep(nextCheckIn(token));
+            }
+        }
+
+        /**
+         * Throws when the user asked to stop, so the run ends before its next
+         * step.
+         *
+         * @throws InterruptedException if a stop was asked
+         */
+        private void checkStopped() throws InterruptedException {
+            if (stopRequested)
+                throw new InterruptedException("Stopped");
+        }
+
+        /**
+         * Marks the stages still running as stopped: the run no longer
+         * follows them (GitHub may still finish their runs).
+         */
+        private void endUnfinishedStages() {
+            for (InternalWorkflowStageActiveDomain stage : domain.getStages()) {
+                if (stage.getStatus() == StageStatus.RUNNING)
+                    stage.finish(StageStatus.STOPPED, null, clock.instant());
             }
         }
 

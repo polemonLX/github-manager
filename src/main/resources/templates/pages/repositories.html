@@ -183,14 +183,23 @@
                hx-push-url="true"
                class="group-item"
                th:classappend="${selectedGroup == null} ? 'active'">All</a>
-            <a th:each="g : ${groups}"
-               th:href="@{/repositories(group=${g.id})}"
-               th:attr="hx-get=@{/repositories(group=${g.id})}"
-               hx-target="#content"
-               hx-push-url="true"
-               class="group-item"
-               th:classappend="${g.id == selectedGroup} ? 'active'"
-               th:text="${g.name}">group</a>
+            <div class="group-row" th:each="g : ${groups}">
+                <a th:href="@{/repositories(group=${g.id})}"
+                   th:attr="hx-get=@{/repositories(group=${g.id})}"
+                   hx-target="#content"
+                   hx-push-url="true"
+                   class="group-item"
+                   th:classappend="${g.id == selectedGroup} ? 'active'"
+                   th:text="${g.name}">group</a>
+                <!-- Deletes only the group: its repositories stay tracked. -->
+                <button type="button" class="group-delete"
+                        th:hx-post="@{/repositories/groups/delete(groupId=${g.id},group=${selectedGroup})}"
+                        th:hx-confirm="|Delete the group '${g.name}'? Its repositories stay tracked.|"
+                        th:title="|Delete group ${g.name}|"
+                        th:aria-label="|Delete group ${g.name}|"
+                        hx-target="#content"
+                        hx-swap="innerHTML">&times;</button>
+            </div>
         </nav>
     </aside>
     </div>

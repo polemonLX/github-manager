@@ -135,6 +135,27 @@ class RepositoryServiceTest {
     }
 
     @Test
+    void deletingAGroupDeletesOnlyTheGroup() {
+        when(groupRepository.findById("g1")).thenReturn(Optional.of(new RepositoryGroup("g1", "u1", "Apps")));
+
+        assertTrue(repositoryService.deleteGroup("u1", "g1"));
+
+        verify(groupRepository).deleteById("g1");
+        verifyNoInteractions(groupMemberRepository, trackedRepositoryRepository, repositoryRepository);
+    }
+
+    @Test
+    void anUnknownOrAnotherUsersGroupIsNotDeleted() {
+        when(groupRepository.findById("g9")).thenReturn(Optional.empty());
+        when(groupRepository.findById("g2")).thenReturn(Optional.of(new RepositoryGroup("g2", "u2", "Theirs")));
+
+        assertFalse(repositoryService.deleteGroup("u1", "g9"));
+        assertFalse(repositoryService.deleteGroup("u1", "g2"));
+        assertFalse(repositoryService.deleteGroup("u1", null));
+        verify(groupRepository, never()).deleteById(anyString());
+    }
+
+    @Test
     void settingTheGroupsJoinsTheNewOnesAndLeavesTheOthers() {
         givenGroups();
         when(repositoryRepository.findByOwnerAndName("polemonLX", "auth")).thenReturn(Optional.of(repository("r1", "auth")));
@@ -296,7 +317,7 @@ class RepositoryServiceTest {
                 new BranchDomain("bugfix/y", "c", false), new BranchDomain("release/1", "d", false), new BranchDomain("dev", "e", false)));
         auth.setPullRequests(List.of(new PullRequestDomain(1, "title", "me", Instant.EPOCH, "url")));
         auth.setReleases(List.of(new TagDomain("1.0.0", "sha", "zip")));
-        auth.setWorkflows(List.of(new WorkflowDomain(1, "release", "active", "path", "url")));
+        auth.setWorkflows(List.of(new WorkflowDomain(1, "release", "active", "path", "url", true)));
         auth.setActionsRunning(2);
         auth.setLastSyncedAt(1_000);
         RepositoryEntity api = repository("r2", "api-lib");
@@ -318,6 +339,7 @@ class RepositoryServiceTest {
         assertEquals(2, dto.getActionsRunning().size());
         assertEquals("1.0.0", dto.getReleases().getFirst().getName());
         assertEquals("release", dto.getWorkflows().getFirst().getName());
+        assertTrue(dto.getWorkflows().getFirst().isRunning());
         assertNotNull(dto.getLastSyncedAt());
         verifyNoInteractions(gitHubClient);
     }
@@ -374,9 +396,11 @@ class RepositoryServiceTest {
         trackedBy("u1", auth);
         when(authService.getGithubToken("u1")).thenReturn("t1");
         when(gitHubClient.getTags("polemonLX", "auth", "t1")).thenReturn(List.of(new TagAPI("v1.0.0", "a", "zip"), new TagAPI("1.1.0", "b", "zip")));
-        when(gitHubClient.getActionsRunning("polemonLX", "auth", "t1")).thenReturn(List.of(new WorkflowRunAPI()));
+        WorkflowRunAPI releaseRun = new WorkflowRunAPI();
+        releaseRun.setWorkflowId(1);
+        when(gitHubClient.getActionsRunning("polemonLX", "auth", "t1")).thenReturn(List.of(releaseRun));
         when(gitHubClient.getOpenPullRequests("polemonLX", "auth", "t1")).thenReturn(List.of(new PullRequestAPI(1, "title", "me", Instant.EPOCH, "url")));
-        when(gitHubClient.getWorkflows("polemonLX", "auth", "t1")).thenReturn(List.of(new WorkflowAPI(1, "release", "active", "path", "url")));
+        when(gitHubClient.getWorkflows("polemonLX", "auth", "t1")).thenReturn(List.of(new WorkflowAPI(1, "release", "active", "path", "url"), new WorkflowAPI(2, "ci", "active", "path2", "url2")));
 
         repositoryService.sync("u1");
 
@@ -384,6 +408,8 @@ class RepositoryServiceTest {
         assertEquals(1, auth.getActionsRunning());
         assertEquals(1, auth.getPullRequests().size());
         assertEquals("release", auth.getWorkflows().getFirst().getName());
+        assertTrue(auth.getWorkflows().getFirst().isRunning());
+        assertFalse(auth.getWorkflows().get(1).isRunning());
         verify(repositoryRepository).update(auth);
     }
 

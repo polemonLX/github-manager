@@ -87,6 +87,73 @@ public class InternalWorkflowStageActiveDomain {
     private long expectedDurationSeconds;
 
     /**
+     * Where the stage is in the run; the worker writes it and the dashboard
+     * reads it, so it is volatile.
+     */
+    private volatile StageStatus status = StageStatus.WAITING;
+
+    /**
+     * Instant the stage ended (succeeded, failed or stopped); {@code null}
+     * before that.
+     */
+    private volatile Instant finishedAt;
+
+    /**
+     * For a pipeline stage, the GitHub run its dispatch created, once found.
+     */
+    private volatile Long runId;
+
+    /**
+     * For a pipeline stage, the URL of that run on GitHub, once found.
+     */
+    private volatile String runUrl;
+
+    /**
+     * Why the stage failed; {@code null} unless it did.
+     */
+    private volatile String error;
+
+    /**
+     * Ends the stage.
+     *
+     * @param endStatus how it ended
+     * @param reason    why, when it failed; {@code null} otherwise
+     * @param now       the current instant
+     */
+    public void finish(StageStatus endStatus, String reason, Instant now) {
+        this.error = reason;
+        this.finishedAt = now;
+        this.status = endStatus;
+    }
+
+    /**
+     * Where a stage is in the run of its workflow.
+     */
+    public enum StageStatus {
+        /**
+         * Not started yet.
+         */
+        WAITING,
+        /**
+         * Started: a commit being made, or a pipeline running on GitHub.
+         */
+        RUNNING,
+        /**
+         * Done: the commit was made, or the pipeline run succeeded.
+         */
+        SUCCEEDED,
+        /**
+         * The commit or dispatch was refused, or the pipeline run didn't succeed.
+         */
+        FAILED,
+        /**
+         * The workflow stopped (by the user, or because another stage failed)
+         * while this stage was running; GitHub may still finish its run.
+         */
+        STOPPED
+    }
+
+    /**
      * The kind of action a stage performs.
      */
     public enum StageTask {

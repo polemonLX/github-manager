@@ -21,4 +21,7 @@ public class WorkflowDTO {
     /** Activation state of the workflow, e.g. {@code active}, {@code disabled_manually}. */
     private String state;
 
+    /** Whether a run of this workflow was queued or in progress at the last sync. */
+    private boolean running;
+
 }
