@@ -1,5 +1,6 @@
 package com.polemon.github_manager.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.*;
 
@@ -11,7 +12,7 @@ import lombok.*;
  */
 @Getter
 @Setter
-@NoArgsConstructor
+@NoArgsConstructor(onConstructor_ = @JsonCreator)
 @AllArgsConstructor
 @ToString
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -80,7 +81,7 @@ public class InternalWorkflowStageEntity {
      */
     @Getter
     @Setter
-    @NoArgsConstructor
+    @NoArgsConstructor(onConstructor_ = @JsonCreator)
     @AllArgsConstructor
     @ToString
     public static class RepositoryRef {

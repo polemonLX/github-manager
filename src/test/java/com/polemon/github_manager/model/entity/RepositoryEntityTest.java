@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RepositoryEntityTest {
@@ -35,6 +36,22 @@ class RepositoryEntityTest {
         assertEquals(createdAt, read.getPullRequests().getFirst().getCreatedAt());
         assertEquals("1.0.0", read.getReleases().getFirst().getName());
         assertEquals("release", read.getWorkflows().getFirst().getName());
+    }
+
+    /**
+     * Rows stored before a field existed lack it in their JSON; reading them
+     * must still work (github-manager 1.0.3 failed on {@code running}).
+     */
+    @Test
+    void jsonStoredBeforeTheRunningFlagStillReads() {
+        String stored = """
+                {"id": "r1", "owner": "polemonLX", "name": "auth",
+                 "workflows": [{"id": 1, "name": "release", "state": "active", "path": "path", "url": "url"}]}""";
+
+        RepositoryEntity read = new ObjectMapper().readValue(stored, RepositoryEntity.class);
+
+        assertEquals("release", read.getWorkflows().getFirst().getName());
+        assertFalse(read.getWorkflows().getFirst().isRunning());
     }
 
 }

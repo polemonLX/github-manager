@@ -1,5 +1,6 @@
 package com.polemon.github_manager.model.domain;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import lombok.*;
 
 import java.time.Instant;
@@ -10,7 +11,7 @@ import java.time.Instant;
  */
 @Getter
 @Setter
-@NoArgsConstructor
+@NoArgsConstructor(onConstructor_ = @JsonCreator)
 @AllArgsConstructor
 @ToString
 public class PullRequestDomain {

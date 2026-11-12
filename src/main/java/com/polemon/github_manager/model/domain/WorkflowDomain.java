@@ -1,5 +1,6 @@
 package com.polemon.github_manager.model.domain;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import lombok.*;
 
 /**
@@ -9,7 +10,7 @@ import lombok.*;
  */
 @Getter
 @Setter
-@NoArgsConstructor
+@NoArgsConstructor(onConstructor_ = @JsonCreator)
 @AllArgsConstructor
 @ToString
 public class WorkflowDomain {
