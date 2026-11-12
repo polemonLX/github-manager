@@ -4,7 +4,6 @@ import com.polemon.api_lib.identity.Identity;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
 import com.polemon.github_manager.service.RepositoryService;
 import com.polemon.github_manager.service.WorkflowService;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -18,7 +17,6 @@ import java.util.List;
  * statistics across all tracked repositories and shows the runs of the
  * user's internal workflows.
  */
-@Slf4j
 @Controller
 @RequestMapping("/")
 public class DashboardController {
@@ -120,7 +118,6 @@ public class DashboardController {
      */
     @PostMapping("/dashboards/active-workflow/stop")
     public String stopActiveWorkflow(Identity identity, @RequestParam String workflowName, Model model) {
-        log.info("Stopping workflow: {}", workflowName);
         workflowService.stopWorkflow(identity.userId(), workflowName);
         addActiveWorkflows(identity, model);
         return ACTIVE_WORKFLOWS_FRAGMENT;

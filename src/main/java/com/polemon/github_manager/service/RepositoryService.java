@@ -1,5 +1,6 @@
 package com.polemon.github_manager.service;
 
+import com.polemon.api_lib.log.LogSafe;
 import com.polemon.api_lib.persistence.exception.PersistenceException;
 import com.polemon.github_manager.client.GitHubClient;
 import com.polemon.github_manager.exceptions.InvalidRepositoryException;
@@ -208,7 +209,7 @@ public class RepositoryService {
                 throw e;
             throw new IllegalArgumentException("A group named '" + trimmed + "' already exists");
         }
-        log.info("Created group '{}'", trimmed);
+        log.info("User {} created group '{}'", userId, LogSafe.of(trimmed));
         return new RepositoryGroupDTO(group.getId(), group.getName());
     }
 
@@ -228,7 +229,7 @@ public class RepositoryService {
             return false;
         }
         groupRepository.deleteById(groupId);
-        log.info("Deleted group '{}'", group.get().getName());
+        log.info("User {} deleted group '{}'", userId, LogSafe.of(group.get().getName()));
         return true;
     }
 
@@ -263,7 +264,7 @@ public class RepositoryService {
             if (!current.contains(groupId))
                 groupMemberRepository.create(new RepositoryGroupMember(UUID.randomUUID().toString(), groupId, link.getId()));
         }
-        log.info("Repository {}/{} is now in {} group(s)", owner, name, wanted.size());
+        log.info("User {} put repository {}/{} in {} group(s)", userId, owner, name, wanted.size());
     }
 
     /**

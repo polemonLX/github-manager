@@ -8,6 +8,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import tools.jackson.databind.JsonNode;
@@ -84,7 +85,10 @@ public class GitHubClient {
 
             return response.getStatusCode().is2xxSuccessful();
         } catch (RestClientException e) {
-            log.warn("GitHub token validation failed: {}", e.getMessage());
+            if (e instanceof HttpClientErrorException.Unauthorized)
+                log.debug("GitHub refused a token");
+            else
+                log.warn("GitHub token validation failed: {}", e.getMessage());
             return false;
         }
     }
@@ -467,7 +471,7 @@ public class GitHubClient {
 
             return mapper.readTree(response.getBody());
         } catch (RestClientException e) {
-            log.warn("GitHub API call failed for {}: {}", path, e.getMessage());
+            logFailure(path, e);
             return null;
         }
     }
@@ -505,7 +509,7 @@ public class GitHubClient {
                 return mapper.createObjectNode();
             return mapper.readTree(responseBody);
         } catch (RestClientException e) {
-            log.warn("GitHub API call failed for {}: {}", path, e.getMessage());
+            logFailure(path, e);
             return null;
         }
     }
@@ -549,6 +553,21 @@ public class GitHubClient {
         headers.set("Authorization", "token " + token);
         headers.set("Accept", "application/vnd.github.v3+json");
         return headers;
+    }
+
+    /**
+     * Logs a failed GitHub call. A 404 is an ordinary answer (a file or a
+     * repository that isn't there) and goes to DEBUG; anything else (bad
+     * token, rate limit, GitHub or network down) to WARN.
+     *
+     * @param path The API path that was called
+     * @param e    The failure
+     */
+    private static void logFailure(String path, RestClientException e) {
+        if (e instanceof HttpClientErrorException.NotFound)
+            log.debug("GitHub has nothing at {}", path);
+        else
+            log.warn("GitHub API call failed for {}: {}", path, e.getMessage());
     }
 
 }

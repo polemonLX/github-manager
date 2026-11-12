@@ -1,20 +1,14 @@
 package com.polemon.github_manager.controller.web;
 
-import com.polemon.api_lib.identity.Identity;
 import com.polemon.github_manager.exceptions.InvalidRepositoryException;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
 import com.polemon.github_manager.model.dto.RepositoryGroupDTO;
 import com.polemon.github_manager.service.RepositoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.bind.support.WebDataBinderFactory;
-import org.springframework.web.context.request.NativeWebRequest;
-import org.springframework.web.method.support.HandlerMethodArgumentResolver;
-import org.springframework.web.method.support.ModelAndViewContainer;
 
 import java.util.List;
 
@@ -210,24 +204,6 @@ class RepositoriesControllerTest {
         verify(repositoryService).sync("u1", "polemonLX", "auth");
         verify(repositoryService).sync("u1");
         verify(repositoryService, never()).syncAll();
-    }
-
-    /**
-     * Stands in for api-lib's resolver: every request comes from user {@code u1}.
-     */
-    private static class FixedIdentity implements HandlerMethodArgumentResolver {
-
-        @Override
-        public boolean supportsParameter(MethodParameter parameter) {
-            return Identity.class.equals(parameter.getParameterType());
-        }
-
-        @Override
-        public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mavContainer,
-                                      NativeWebRequest webRequest, WebDataBinderFactory binderFactory) {
-            return new Identity("u1", "polemon", false);
-        }
-
     }
 
 }

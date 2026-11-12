@@ -1,5 +1,6 @@
 package com.polemon.github_manager.service;
 
+import com.polemon.api_lib.log.LogSafe;
 import com.polemon.api_lib.persistence.exception.PersistenceException;
 import com.polemon.github_manager.client.GitHubClient;
 import com.polemon.github_manager.exceptions.InvalidWorkflowException;
@@ -201,13 +202,13 @@ public class WorkflowService {
 
         Optional<InternalWorkflowEntity> stored = findByName(userId, updatedWorkflow.getName());
         if (stored.isEmpty()) {
-            log.warn("No workflow named '{}' found to update", updatedWorkflow.getName());
+            log.debug("User {} has no workflow '{}' to update", userId, LogSafe.of(updatedWorkflow.getName()));
             return;
         }
 
         stored.get().setStages(convertDtoToEntity(updatedWorkflow).getStages());
         workflowRepository.update(stored.get());
-        log.debug("Updated workflow '{}'", updatedWorkflow.getName());
+        log.debug("Updated workflow '{}' of user {}", LogSafe.of(updatedWorkflow.getName()), userId);
     }
 
     /**
@@ -224,12 +225,12 @@ public class WorkflowService {
 
         Optional<InternalWorkflowEntity> stored = findByName(userId, workflowName);
         if (stored.isEmpty()) {
-            log.warn("No workflow named '{}' found to delete", workflowName);
+            log.debug("User {} has no workflow '{}' to delete", userId, LogSafe.of(workflowName));
             return;
         }
 
         workflowRepository.deleteById(stored.get().getId());
-        log.debug("Deleted workflow '{}'", workflowName);
+        log.debug("Deleted workflow '{}' of user {}", LogSafe.of(workflowName), userId);
     }
 
     /**
@@ -279,7 +280,7 @@ public class WorkflowService {
             active.remove(workflowName);
             active.put(workflowName, worker);
         }
-        log.info("Starting workflow '{}' ({} stage(s))", workflowName, workflow.getStages().size());
+        log.info("User {} started workflow '{}' ({} stage(s))", userId, LogSafe.of(workflowName), workflow.getStages().size());
         executor.execute(worker::run);
     }
 
@@ -292,8 +293,10 @@ public class WorkflowService {
      */
     public void stopWorkflow(String userId, String workflowName) {
         Worker worker = activeWorkflowsOf(userId).get(workflowName);
-        if (worker != null && worker.domain.isActive())
+        if (worker != null && worker.domain.isActive()) {
+            log.info("User {} stopped workflow '{}'", userId, LogSafe.of(workflowName));
             worker.stop();
+        }
     }
 
     /**
@@ -820,7 +823,7 @@ public class WorkflowService {
         private void run() {
             thread = Thread.currentThread();
             domain.start(clock.instant());
-            String name = domain.getWorkflowName();
+            String name = LogSafe.of(domain.getWorkflowName());
             try {
                 while (true) {
                     checkStopped();
@@ -834,15 +837,15 @@ public class WorkflowService {
                     domain.clearCurrentStages();
                 }
                 domain.finish(WorkflowStatus.SUCCEEDED, null, clock.instant());
-                log.info("Workflow '{}' succeeded", name);
+                log.info("Workflow '{}' of user {} succeeded", name, userId);
             } catch (InterruptedException e) {
                 endUnfinishedStages();
                 domain.finish(WorkflowStatus.STOPPED, "Stopped by the user", clock.instant());
-                log.info("Workflow '{}' stopped", name);
+                log.info("Workflow '{}' of user {} stopped", name, userId);
             } catch (RuntimeException e) {
                 endUnfinishedStages();
                 domain.finish(WorkflowStatus.FAILED, e.getMessage(), clock.instant());
-                log.warn("Workflow '{}' failed: {}", name, e.getMessage());
+                log.warn("Workflow '{}' of user {} failed: {}", name, userId, LogSafe.of(e.getMessage()));
             } finally {
                 thread = null;
             }

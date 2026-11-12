@@ -61,9 +61,9 @@ public class SettingsController {
                                @RequestParam("github-token") String githubToken) {
         try {
             authService.setGithubToken(identity.userId(), githubToken);
-            log.info("Successfully saved GitHub token");
+            log.info("User {} saved a GitHub token", identity.userId());
         } catch (InvalidTokenException e) {
-            log.warn("Invalid GitHub token provided: {}", e.getMessage());
+            log.debug("User {} gave a GitHub token GitHub refused", identity.userId());
             model.addAttribute("error", "Invalid or expired GitHub token");
         }
 
@@ -84,6 +84,7 @@ public class SettingsController {
                                 @RequestHeader(value = "HX-Request", required = false) String hxRequest) {
         authService.clear(identity.userId());
         repositoryService.clear(identity.userId());
+        log.info("User {} cleared its GitHub token and repositories", identity.userId());
 
         return answerRequest(model, hxRequest);
     }

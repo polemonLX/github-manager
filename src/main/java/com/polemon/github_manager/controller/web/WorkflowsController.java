@@ -1,6 +1,7 @@
 package com.polemon.github_manager.controller.web;
 
 import com.polemon.api_lib.identity.Identity;
+import com.polemon.api_lib.log.LogSafe;
 import com.polemon.github_manager.exceptions.InvalidWorkflowException;
 import com.polemon.github_manager.model.dto.InternalWorkflowDTO;
 import com.polemon.github_manager.model.dto.InternalWorkflowStageDTO;
@@ -71,7 +72,7 @@ public class WorkflowsController {
                                @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                @RequestBody InternalWorkflowDTO workflow) {
         workflowService.saveWorkflow(identity.userId(), workflow);
-        log.info("Saved workflow: {}", workflow.getName());
+        log.info("User {} saved workflow '{}'", identity.userId(), LogSafe.of(workflow.getName()));
 
         return answerRequest(identity, model, hxRequest);
     }
@@ -91,7 +92,7 @@ public class WorkflowsController {
                                  @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                  @RequestBody InternalWorkflowDTO updatedWorkflow) {
         workflowService.updateWorkflow(identity.userId(), updatedWorkflow);
-        log.info("Updated workflow: {}", updatedWorkflow.getName());
+        log.info("User {} updated workflow '{}'", identity.userId(), LogSafe.of(updatedWorkflow.getName()));
 
         return answerRequest(identity, model, hxRequest);
     }
@@ -111,7 +112,7 @@ public class WorkflowsController {
                                  @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                  @PathVariable String workflowName) {
         workflowService.deleteWorkflow(identity.userId(), workflowName);
-        log.info("Deleted workflow: {}", workflowName);
+        log.info("User {} deleted workflow '{}'", identity.userId(), LogSafe.of(workflowName));
 
         return answerRequest(identity, model, hxRequest);
     }
@@ -131,14 +132,12 @@ public class WorkflowsController {
     public String startWorkflow(Identity identity, Model model, HttpServletResponse response,
                                 @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                 @RequestBody InternalWorkflowDTO workflow) {
-        log.info("Starting workflow: {}", workflow.getName());
-
         try {
             workflowService.startWorkflow(identity.userId(), workflow);
 
             return answerRequest(identity, model, hxRequest);
         } catch (InvalidWorkflowException e) {
-            log.warn("Failed to start workflow: {}. Reason: {}", workflow.getName(), e.getMessage());
+            log.debug("User {} can't start workflow '{}': {}", identity.userId(), LogSafe.of(workflow.getName()), LogSafe.of(e.getMessage()));
             response.setStatus(HttpStatus.BAD_REQUEST.value());
             model.addAttribute("error", e.getMessage());
             return "pages/workflows :: startWorkflowError";
@@ -147,7 +146,7 @@ public class WorkflowsController {
 
     /**
      * Stops the internal workflow with the given name, then re-renders the
-     * workflows fragment. Execution is not yet implemented.
+     * workflows fragment. The run stays listed as stopped.
      *
      * @param identity the caller, from auth's identity token
      * @param model        the model to populate for rendering
@@ -159,7 +158,6 @@ public class WorkflowsController {
     public String stopWorkflow(Identity identity, Model model,
                                @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                @RequestParam String workflowName) {
-        log.info("Stopping workflow: {}", workflowName);
         workflowService.stopWorkflow(identity.userId(), workflowName);
 
         return answerRequest(identity, model, hxRequest);
@@ -175,7 +173,7 @@ public class WorkflowsController {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> rejectInvalidWorkflow(IllegalArgumentException e) {
-        log.warn("Rejected workflow: {}", e.getMessage());
+        log.debug("Workflow refused: {}", LogSafe.of(e.getMessage()));
         return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
     }
 

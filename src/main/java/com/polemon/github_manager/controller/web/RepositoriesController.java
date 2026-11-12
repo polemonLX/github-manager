@@ -1,6 +1,7 @@
 package com.polemon.github_manager.controller.web;
 
 import com.polemon.api_lib.identity.Identity;
+import com.polemon.api_lib.log.LogSafe;
 import com.polemon.github_manager.exceptions.InvalidRepositoryException;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
 import com.polemon.github_manager.model.dto.RepositoryGroupDTO;
@@ -71,7 +72,7 @@ public class RepositoriesController {
             repositoryService.createGroup(identity.userId(), name);
             return answerRequest(identity, model, hxRequest, group);
         } catch (IllegalArgumentException e) {
-            log.warn("Failed to create group '{}': {}", name, e.getMessage());
+            log.debug("User {} can't create group '{}': {}", identity.userId(), LogSafe.of(name), LogSafe.of(e.getMessage()));
             return badRequest(model, response, e);
         }
     }
@@ -129,7 +130,7 @@ public class RepositoriesController {
             repositoryService.setGroups(identity.userId(), owner, name, groupIds);
             return answerRequest(identity, model, hxRequest, group);
         } catch (IllegalArgumentException e) {
-            log.warn("Failed to set the groups of {}/{}: {}", owner, name, e.getMessage());
+            log.debug("User {} can't set the groups of {}/{}: {}", identity.userId(), LogSafe.of(owner), LogSafe.of(name), LogSafe.of(e.getMessage()));
             return badRequest(model, response, e);
         }
     }
@@ -160,11 +161,12 @@ public class RepositoriesController {
                 throw new IllegalArgumentException("Repository owner and name contain invalid characters");
 
             repositoryService.addRepository(identity.userId(), new RepositoryDTO(repository.getOwner(), repository.getName()));
-            log.info("Added repository: {}/{}", repository.getOwner(), repository.getName());
+            log.info("User {} added repository {}/{}", identity.userId(), repository.getOwner(), repository.getName());
 
             return answerRequest(identity, model, hxRequest, group);
         } catch (IllegalArgumentException | InvalidRepositoryException e) {
-            log.warn("Failed to add repository: https://github.com/{}/{}. Reason: {}", repository.getOwner(), repository.getName(), e.getMessage());
+            log.debug("User {} can't add repository {}/{}: {}", identity.userId(), LogSafe.of(repository.getOwner()), LogSafe.of(repository.getName()),
+                    LogSafe.of(e.getMessage()));
             response.setStatus(HttpStatus.BAD_REQUEST.value());
             model.addAttribute("error", e.getMessage());
             return "pages/repositories :: addRepoError";
@@ -185,7 +187,7 @@ public class RepositoriesController {
                                    @RequestHeader(value = "HX-Request", required = false) String hxRequest,
                                    @RequestBody RepositoryDTO repository) {
         repositoryService.removeRepository(identity.userId(), new RepositoryDTO(repository.getOwner(), repository.getName()));
-        log.info("Removed repository: {}/{}", repository.getOwner(), repository.getName());
+        log.info("User {} removed repository {}/{}", identity.userId(), LogSafe.of(repository.getOwner()), LogSafe.of(repository.getName()));
         return answerRequest(identity, model, hxRequest, null);
     }
 
@@ -203,10 +205,10 @@ public class RepositoriesController {
     public String syncRepositories(Identity identity, HttpServletResponse response,
                                    @RequestBody(required = false) RepositoryDTO repository) {
         if (repository != null) {
-            log.info("Syncing repository: {}/{}", repository.getOwner(), repository.getName());
+            log.info("User {} syncs repository {}/{}", identity.userId(), LogSafe.of(repository.getOwner()), LogSafe.of(repository.getName()));
             repositoryService.sync(identity.userId(), repository.getOwner(), repository.getName());
         } else {
-            log.info("Syncing all tracked repositories");
+            log.info("User {} syncs all its repositories", identity.userId());
             repositoryService.sync(identity.userId());
         }
 
