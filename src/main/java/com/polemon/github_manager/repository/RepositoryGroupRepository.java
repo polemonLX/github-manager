@@ -52,6 +52,15 @@ public class RepositoryGroupRepository {
     }
 
     /**
+     * Replaces a stored group (its name).
+     *
+     * @param group the group, with the id of the entry to replace
+     */
+    public void update(RepositoryGroup group) {
+        datasource.update(group);
+    }
+
+    /**
      * Deletes a group; its memberships go with it (cascade), the tracked
      * repositories stay.
      *

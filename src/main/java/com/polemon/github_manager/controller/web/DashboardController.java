@@ -1,6 +1,7 @@
 package com.polemon.github_manager.controller.web;
 
 import com.polemon.api_lib.identity.Identity;
+import com.polemon.github_manager.model.dto.InternalWorkflowActiveDTO;
 import com.polemon.github_manager.model.dto.RepositoryDTO;
 import com.polemon.github_manager.service.RepositoryService;
 import com.polemon.github_manager.service.WorkflowService;
@@ -139,14 +140,18 @@ public class DashboardController {
     }
 
     /**
-     * Adds the workflow runs and their refresh interval to the model.
+     * Adds the workflow runs, whether any of them is still active, and the
+     * refresh interval to the model. The panel polls only while a run is
+     * active: once the last one ends, the answer comes without polling.
      *
      * @param identity the caller
      * @param model    the model
      */
     private void addActiveWorkflows(Identity identity, Model model) {
+        List<InternalWorkflowActiveDTO> runs = workflowService.getInternalWorkflowActiveList(identity.userId());
         model.addAttribute("activeWorkflowRefreshIntervalSeconds", activeWorkflowRefreshIntervalSeconds);
-        model.addAttribute("activeWorkflows", workflowService.getInternalWorkflowActiveList(identity.userId()));
+        model.addAttribute("activeWorkflows", runs);
+        model.addAttribute("anyWorkflowActive", runs.stream().anyMatch(InternalWorkflowActiveDTO::isActive));
     }
 
 }

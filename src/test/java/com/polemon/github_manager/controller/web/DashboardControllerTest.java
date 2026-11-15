@@ -61,6 +61,7 @@ class DashboardControllerTest {
                 .andExpect(model().attribute("branchCount", 2))
                 .andExpect(model().attribute("actionsRunning", 1))
                 .andExpect(model().attribute("activeWorkflows", RUNS))
+                .andExpect(model().attribute("anyWorkflowActive", false))
                 .andExpect(model().attribute("activeWorkflowRefreshIntervalSeconds", 7));
 
         mvc.perform(get("/dashboard").header("HX-Request", "true"))
@@ -73,6 +74,16 @@ class DashboardControllerTest {
                 .andExpect(view().name("pages/dashboard :: active-workflow-content"))
                 .andExpect(model().attribute("activeWorkflows", RUNS))
                 .andExpect(model().attribute("activeWorkflowRefreshIntervalSeconds", 7));
+    }
+
+    @Test
+    void thePanelPollsOnlyWhileARunIsActive() throws Exception {
+        InternalWorkflowActiveDTO running = new InternalWorkflowActiveDTO();
+        running.setActive(true);
+        when(workflowService.getInternalWorkflowActiveList("u1")).thenReturn(List.of(new InternalWorkflowActiveDTO(), running));
+
+        mvc.perform(get("/dashboards/active-workflow/refresh"))
+                .andExpect(model().attribute("anyWorkflowActive", true));
     }
 
     @Test

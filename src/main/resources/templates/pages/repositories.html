@@ -77,6 +77,33 @@
             </form>
         </div>
     </div>
+    <div id="renameGroupModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <strong class="modal-title">Rename group</strong>
+                <button type="button" class="modal-close" id="renameGroupCloseBtn">&times;</button>
+            </div>
+            <!-- A group's pencil fills groupId and the current name (app.js); 200 swaps #content, 400 shows the reason. -->
+            <form id="renameGroupForm"
+                  hx-post="/repositories/groups/rename"
+                  hx-target="#content"
+                  hx-target-400="#renameGroupErrorMessage"
+                  hx-swap="innerHTML">
+                <input type="hidden" name="groupId" id="renameGroupId">
+                <input type="hidden" name="group" th:value="${selectedGroup}">
+                <div class="modal-body">
+                    <div id="renameGroupErrorMessage"></div>
+                    <div class="form-group">
+                        <label for="renameGroupName">Group name:</label>
+                        <input type="text" id="renameGroupName" name="name" class="form-control" maxlength="64" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div id="editRepoModal" class="modal" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
@@ -120,10 +147,16 @@
 
     <div class="repo-layout">
     <div class="repo-main">
+    <!-- Filters the rows below as you type, in the browser (app.js); the server isn't asked again -->
+    <div class="repo-filter" th:unless="${#lists.isEmpty(repositories)}">
+        <input type="search" id="repoFilter" class="form-control" placeholder="Filter repositories by name…"
+               aria-label="Filter repositories by name" autocomplete="off" spellcheck="false">
+    </div>
     <table class="data-table">
         <thead>
         <tr>
             <th>Repository</th>
+            <th>Groups</th>
             <th>Releases</th>
             <th>Actions running</th>
             <th>Open PRs</th>
@@ -136,12 +169,31 @@
         </thead>
         <tbody>
         <tr th:if="${#lists.isEmpty(repositories)}">
-            <td colspan="9" class="empty-state"
-                th:text="${selectedGroup == null} ? 'No repositories added yet.' : 'No repositories in this group.'">No repositories added yet.</td>
+            <td colspan="10" class="empty-state" th:switch="${selectedGroup}">
+                <th:block th:case="null">No repositories added yet.</th:block>
+                <th:block th:case="'none'">Every repository is in a group.</th:block>
+                <th:block th:case="*">No repositories in this group.</th:block>
+            </td>
         </tr>
-        <tr th:each="repo : ${repositories}">
+        <tr id="repoNoMatch" style="display: none;">
+            <td colspan="10" class="empty-state">No repository matches the filter.</td>
+        </tr>
+        <tr th:each="repo : ${repositories}" class="repo-row"
+            th:attr="data-name=${#strings.toLowerCase(repo.owner + '/' + repo.name)}">
             <td>
                 <a th:href="'https://github.com/' + ${repo.owner} + '/' + ${repo.name}" th:text="${repo.owner + '/' + repo.name}" target="_blank" rel="noopener noreferrer"></a>
+            </td>
+            <!-- The repository's groups, by name; a chip filters by its group -->
+            <td class="group-chips">
+                <a th:each="g : ${groups}" th:if="${#lists.contains(repo.groupIds, g.id)}"
+                   th:href="@{/repositories(group=${g.id})}"
+                   th:attr="hx-get=@{/repositories(group=${g.id})}"
+                   hx-target="#content"
+                   hx-push-url="true"
+                   class="group-chip"
+                   th:classappend="${g.id == selectedGroup} ? 'active'"
+                   th:title="|Show the group ${g.name}|"
+                   th:text="${g.name}">group</a>
             </td>
             <td>
                 <label>
@@ -177,6 +229,13 @@
             <button type="button" class="btn btn-small" id="addGroupBtn" title="Create a group">+ New</button>
         </div>
         <nav class="repo-groups-nav">
+            <a th:href="@{/repositories(group='none')}"
+               hx-get="/repositories?group=none"
+               hx-target="#content"
+               hx-push-url="true"
+               class="group-item group-none"
+               title="Repositories in no group"
+               th:classappend="${selectedGroup == 'none'} ? 'active'">None</a>
             <a th:href="@{/repositories}"
                hx-get="/repositories"
                hx-target="#content"
@@ -191,6 +250,10 @@
                    class="group-item"
                    th:classappend="${g.id == selectedGroup} ? 'active'"
                    th:text="${g.name}">group</a>
+                <button type="button" class="group-rename"
+                        th:attr="data-group-id=${g.id},data-group-name=${g.name}"
+                        th:title="|Rename group ${g.name}|"
+                        th:aria-label="|Rename group ${g.name}|">&#9998;</button>
                 <!-- Deletes only the group: its repositories stay tracked. -->
                 <button type="button" class="group-delete"
                         th:hx-post="@{/repositories/groups/delete(groupId=${g.id},group=${selectedGroup})}"

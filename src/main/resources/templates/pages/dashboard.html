@@ -35,9 +35,11 @@
             <h2 class="panel-title">Active Workflows</h2>
             <span class="panel-subtitle">Your workflow runs: what is running, finished or waiting to start</span>
         </div>
+        <!-- Polls only while a run waits or runs (anyWorkflowActive): once the last one ends, the swapped-in panel
+             has no hx-get/hx-trigger and the polling stops. -->
         <div th:fragment="active-workflow-content" id="activeWorkflows" class="panel-body"
-             hx-get="/dashboards/active-workflow/refresh"
-             th:attr="hx-trigger='every ' + ${activeWorkflowRefreshIntervalSeconds ?: 10} + 's'"
+             th:hx-get="${anyWorkflowActive} ? '/dashboards/active-workflow/refresh' : null"
+             th:hx-trigger="${anyWorkflowActive} ? ('every ' + ${activeWorkflowRefreshIntervalSeconds ?: 10} + 's') : null"
              hx-swap="outerHTML">
             <div class="workflow-empty" th:if="${activeWorkflows == null or #lists.isEmpty(activeWorkflows)}">
                 <div class="workflow-empty-icon">⚙️</div>

@@ -44,6 +44,12 @@ public class RepositoryService {
             DateTimeFormatter.ofPattern("HH:mm:ss dd/MM/yyyy").withZone(ZoneId.systemDefault());
 
     /**
+     * The filter for repositories in no group. Group ids are UUIDs, so it
+     * never names a real group.
+     */
+    public static final String NO_GROUP = "none";
+
+    /**
      * Longest accepted group name.
      */
     static final int MAX_GROUP_NAME = 64;
@@ -139,12 +145,13 @@ public class RepositoryService {
 
     /**
      * Retrieves a user's tracked repositories with the groups each is in,
-     * optionally only those of one group. Like {@link #getRepositories(String)},
-     * from the database only.
+     * optionally only those of one group, or only those in no group. Like
+     * {@link #getRepositories(String)}, from the database only.
      *
      * @param userId  the user id
-     * @param groupId the group to show, or {@code null} for all; a group that
-     *                isn't the user's also shows all
+     * @param groupId the group to show, {@value #NO_GROUP} for the repositories
+     *                in no group, or {@code null} for all; a group that isn't
+     *                the user's also shows all
      * @return the repositories, sorted by owner and name, each with its
      *         {@code groupIds}
      */
@@ -156,12 +163,13 @@ public class RepositoryService {
             for (RepositoryGroupMember member : groupMemberRepository.findByGroup(group.getId()))
                 groupsByLink.computeIfAbsent(member.getTrackedRepositoryId(), link -> new ArrayList<>()).add(group.getId());
         }
+        boolean noGroup = NO_GROUP.equals(groupId);
         boolean filtered = groupId != null && groupIds.contains(groupId);
 
         List<RepositoryDTO> repositories = new ArrayList<>();
         for (TrackedRepository link : trackedRepositoryRepository.findByUser(userId)) {
             List<String> linkGroups = groupsByLink.getOrDefault(link.getId(), List.of());
-            if (filtered && !linkGroups.contains(groupId))
+            if (filtered && !linkGroups.contains(groupId) || noGroup && !linkGroups.isEmpty())
                 continue;
             repositoryRepository.findById(link.getRepositoryId()).ifPresent(repository -> {
                 RepositoryDTO repositoryDTO = convertEntityToDTO(repository);
@@ -197,20 +205,44 @@ public class RepositoryService {
      *                                  already used by one of the user's groups
      */
     public RepositoryGroupDTO createGroup(String userId, String name) {
-        String trimmed = name == null ? "" : name.trim();
-        if (trimmed.isEmpty() || trimmed.length() > MAX_GROUP_NAME)
-            throw new IllegalArgumentException("The group name must have 1 to " + MAX_GROUP_NAME + " characters");
+        String trimmed = validGroupName(name);
 
         RepositoryGroup group = new RepositoryGroup(UUID.randomUUID().toString(), userId, trimmed);
         try {
             groupRepository.create(group);
         } catch (PersistenceException e) {
-            if (e.getReason() != PersistenceException.Reason.DUPLICATE)
-                throw e;
-            throw new IllegalArgumentException("A group named '" + trimmed + "' already exists");
+            throw nameTaken(e, trimmed);
         }
         log.info("User {} created group '{}'", userId, LogSafe.of(trimmed));
         return new RepositoryGroupDTO(group.getId(), group.getName());
+    }
+
+    /**
+     * Renames one of a user's groups; its repositories stay in it.
+     *
+     * @param userId  the user id
+     * @param groupId the group to rename
+     * @param name    the new name; surrounding spaces are dropped
+     * @throws IllegalArgumentException if the group isn't the user's, or the
+     *                                  name is empty, longer than
+     *                                  {@value #MAX_GROUP_NAME} characters, or
+     *                                  already used by another of the user's
+     *                                  groups
+     */
+    public void renameGroup(String userId, String groupId, String name) {
+        String trimmed = validGroupName(name);
+        RepositoryGroup group = (groupId == null ? Optional.<RepositoryGroup>empty() : groupRepository.findById(groupId))
+                .filter(found -> found.getUserId().equals(userId))
+                .orElseThrow(() -> new IllegalArgumentException("Unknown group"));
+
+        String previous = group.getName();
+        group.setName(trimmed);
+        try {
+            groupRepository.update(group);
+        } catch (PersistenceException e) {
+            throw nameTaken(e, trimmed);
+        }
+        log.info("User {} renamed group '{}' to '{}'", userId, LogSafe.of(previous), LogSafe.of(trimmed));
     }
 
     /**
@@ -690,6 +722,35 @@ public class RepositoryService {
             branchDomains.add(branchDomain);
         }
         return branchDomains;
+    }
+
+    /**
+     * Checks a group name.
+     *
+     * @param name the name typed, if any
+     * @return the name without surrounding spaces
+     * @throws IllegalArgumentException if it is empty or longer than
+     *                                  {@value #MAX_GROUP_NAME} characters
+     */
+    private static String validGroupName(String name) {
+        String trimmed = name == null ? "" : name.trim();
+        if (trimmed.isEmpty() || trimmed.length() > MAX_GROUP_NAME)
+            throw new IllegalArgumentException("The group name must have 1 to " + MAX_GROUP_NAME + " characters");
+        return trimmed;
+    }
+
+    /**
+     * Turns a duplicate group name into the reason shown to the user; any
+     * other storage failure goes on as it is.
+     *
+     * @param e    the storage failure
+     * @param name the name that was stored
+     * @return the exception to throw
+     */
+    private static RuntimeException nameTaken(PersistenceException e, String name) {
+        if (e.getReason() != PersistenceException.Reason.DUPLICATE)
+            return e;
+        return new IllegalArgumentException("A group named '" + name + "' already exists");
     }
 
 }

@@ -39,6 +39,15 @@ class RepositoryGroupRepositoryTest {
     }
 
     @Test
+    void updateDelegates() {
+        RepositoryGroup group = new RepositoryGroup("g1", "u1", "Apps");
+
+        repository.update(group);
+
+        verify(datasource).update(group);
+    }
+
+    @Test
     void deleteDelegates() {
         repository.deleteById("g1");
 

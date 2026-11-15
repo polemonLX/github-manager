@@ -82,6 +82,16 @@ class RepositoryServiceTest {
     }
 
     @Test
+    void listsOnlyTheRepositoriesInNoGroup() {
+        givenGroups();
+
+        List<RepositoryDTO> repositories = repositoryService.getRepositories("u1", RepositoryService.NO_GROUP);
+
+        assertEquals(List.of("server"), repositories.stream().map(RepositoryDTO::getName).toList());
+        assertEquals(List.of(), repositories.getFirst().getGroupIds());
+    }
+
+    @Test
     void aGroupThatIsNotTheUsersShowsEveryRepository() {
         givenGroups();
 
@@ -132,6 +142,50 @@ class RepositoryServiceTest {
         doThrow(failure).when(groupRepository).create(any());
 
         assertSame(failure, assertThrows(PersistenceException.class, () -> repositoryService.createGroup("u1", "Apps")));
+    }
+
+    @Test
+    void renamingAGroupStoresTheTrimmedName() {
+        RepositoryGroup group = new RepositoryGroup("g1", "u1", "Apps");
+        when(groupRepository.findById("g1")).thenReturn(Optional.of(group));
+
+        repositoryService.renameGroup("u1", "g1", "  Services ");
+
+        assertEquals("Services", group.getName());
+        verify(groupRepository).update(group);
+        verifyNoInteractions(groupMemberRepository);
+    }
+
+    @Test
+    void onlyTheUsersOwnGroupCanBeRenamed() {
+        when(groupRepository.findById("g2")).thenReturn(Optional.of(new RepositoryGroup("g2", "u2", "Theirs")));
+        when(groupRepository.findById("g9")).thenReturn(Optional.empty());
+
+        assertEquals("Unknown group", assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", "g2", "Mine")).getMessage());
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", "g9", "Mine"));
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", null, "Mine"));
+        verify(groupRepository, never()).update(any());
+    }
+
+    @Test
+    void aGroupCantBeRenamedToAnEmptyLongOrTakenName() {
+        when(groupRepository.findById("g1")).thenReturn(Optional.of(new RepositoryGroup("g1", "u1", "Apps")));
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", "g1", " "));
+        assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", "g1", "x".repeat(RepositoryService.MAX_GROUP_NAME + 1)));
+        verify(groupRepository, never()).update(any());
+
+        doThrow(duplicate()).when(groupRepository).update(any());
+        assertEquals("A group named 'libs' already exists",
+                assertThrows(IllegalArgumentException.class, () -> repositoryService.renameGroup("u1", "g1", "libs")).getMessage());
+    }
+
+    @Test
+    void otherFailuresRenamingAGroupPropagate() {
+        when(groupRepository.findById("g1")).thenReturn(Optional.of(new RepositoryGroup("g1", "u1", "Apps")));
+        PersistenceException failure = new PersistenceException("down");
+        doThrow(failure).when(groupRepository).update(any());
+
+        assertSame(failure, assertThrows(PersistenceException.class, () -> repositoryService.renameGroup("u1", "g1", "Services")));
     }
 
     @Test

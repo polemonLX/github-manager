@@ -193,6 +193,37 @@ document.addEventListener('click', function (event) {
     }
 });
 
+// Rename Group modal (repositories page): a group's pencil fills it with the
+// group id and current name; the form submits via HTMX (200 swaps #content,
+// 400 shows the reason in the modal).
+document.addEventListener('click', function (event) {
+    const target = event.target;
+    if (!target)
+        return;
+
+    const modal = document.getElementById('renameGroupModal');
+    if (!modal)
+        return;
+
+    const pencil = target.closest ? target.closest('.group-rename') : null;
+    if (pencil) {
+        event.preventDefault();
+        const err = document.getElementById('renameGroupErrorMessage');
+        if (err)
+            err.innerHTML = '';
+        document.getElementById('renameGroupId').value = pencil.dataset.groupId || '';
+        const input = document.getElementById('renameGroupName');
+        input.value = pencil.dataset.groupName || '';
+        modal.style.display = 'block';
+        input.focus();
+        input.select();
+        return;
+    }
+
+    if (target.id === 'renameGroupCloseBtn' || target === modal)
+        modal.style.display = 'none';
+});
+
 // Edit Repository modal (repositories page): a row's Edit button fills it
 // with the repository and checks the groups it is in (data-groups, comma
 // separated ids). Save submits via HTMX; Remove hands over to the remove
@@ -1320,5 +1351,45 @@ document.addEventListener('click', function (event) {
                 alert('Error saving workflow');
             });
         return;
+    }
+});
+
+// Repositories: filter the rows by name as you type, in the browser only (no
+// request). The text is kept when HTMX re-renders the page (adding or editing
+// a repository, changing the group), and the filter is applied again.
+let repoFilterText = '';
+
+function applyRepoFilter() {
+    const input = document.getElementById('repoFilter');
+    if (!input)
+        return;
+
+    const q = input.value.trim().toLowerCase();
+    const rows = document.querySelectorAll('.repo-row');
+    let shown = 0;
+    Array.prototype.forEach.call(rows, function (row) {
+        const match = (row.getAttribute('data-name') || '').indexOf(q) !== -1;
+        row.style.display = match ? '' : 'none';
+        if (match)
+            shown++;
+    });
+
+    const noMatch = document.getElementById('repoNoMatch');
+    if (noMatch)
+        noMatch.style.display = rows.length > 0 && shown === 0 ? '' : 'none';
+}
+
+document.addEventListener('input', function (event) {
+    if (!event.target || event.target.id !== 'repoFilter')
+        return;
+    repoFilterText = event.target.value;
+    applyRepoFilter();
+});
+
+document.body.addEventListener('htmx:afterSwap', function () {
+    const input = document.getElementById('repoFilter');
+    if (input && repoFilterText) {
+        input.value = repoFilterText;
+        applyRepoFilter();
     }
 });

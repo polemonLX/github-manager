@@ -98,6 +98,75 @@ class RepositoriesPageTest {
     }
 
     @Test
+    void eachGroupCanBeRenamedFromAModal() {
+        String html = render("g1", List.of(new RepositoryGroupDTO("g1", "Apps"), new RepositoryGroupDTO("g2", "O'Libs")), List.of())
+                .replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("<button type=\"button\" class=\"group-rename\" title=\"Rename group O&#39;Libs\""));
+        assertTrue(html.contains("data-group-id=\"g2\" data-group-name=\"O&#39;Libs\">&#9998;</button>"));
+        assertTrue(html.contains("aria-label=\"Rename group Apps\""));
+        assertTrue(html.contains("id=\"renameGroupModal\""));
+        assertTrue(html.contains("hx-post=\"/repositories/groups/rename\""));
+        assertTrue(html.contains("hx-target-400=\"#renameGroupErrorMessage\""));
+        assertTrue(html.contains("<input type=\"hidden\" name=\"groupId\" id=\"renameGroupId\">"));
+        assertTrue(html.indexOf("class=\"group-rename\"") < html.indexOf("class=\"group-delete\""));
+    }
+
+    @Test
+    void eachRowShowsItsGroupsAsChipsThatFilter() {
+        List<RepositoryGroupDTO> groups = List.of(new RepositoryGroupDTO("g1", "Apps"), new RepositoryGroupDTO("g2", "Libs"), new RepositoryGroupDTO("g3", "Ops"));
+        String html = render("g2", groups, List.of(repository("auth", List.of("g3", "g1")), repository("api-lib", List.of())))
+                .replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("<th>Groups</th>"));
+        String auth = html.substring(html.indexOf("data-name=\"polemonlx/auth\""), html.indexOf("data-name=\"polemonlx/api-lib\""));
+        assertTrue(auth.contains("hx-get=\"/repositories?group=g1\""));
+        assertTrue(auth.contains("title=\"Show the group Apps\" hx-get=\"/repositories?group=g1\">Apps</a>"));
+        assertTrue(auth.contains(">Ops</a>"));
+        assertFalse(auth.contains(">Libs</a>"));
+        assertTrue(auth.indexOf(">Apps</a>") < auth.indexOf(">Ops</a>"));
+        String apiLib = html.substring(html.indexOf("data-name=\"polemonlx/api-lib\""));
+        assertTrue(apiLib.contains("<td class=\"group-chips\"> </td>"));
+        assertTrue(html.contains("colspan=\"10\""));
+        assertFalse(html.contains("colspan=\"9\""));
+    }
+
+    @Test
+    void theChipOfTheGroupShownIsMarked() {
+        String html = render("g1", List.of(new RepositoryGroupDTO("g1", "Apps")), List.of(repository("auth", List.of("g1"))))
+                .replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("class=\"group-chip active\""));
+    }
+
+    @Test
+    void theRowsCanBeFilteredInTheBrowser() {
+        String html = render(null, List.of(), List.of(repository("Auth", List.of()))).replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("<input type=\"search\" id=\"repoFilter\" class=\"form-control\""));
+        assertTrue(html.contains("<tr class=\"repo-row\" data-name=\"polemonlx/auth\">"));
+        assertTrue(html.contains("<tr id=\"repoNoMatch\" style=\"display: none;\">"));
+        assertTrue(html.contains("No repository matches the filter."));
+    }
+
+    @Test
+    void withoutRepositoriesThereIsNothingToFilter() {
+        assertFalse(render(null, List.of(), List.of()).contains("id=\"repoFilter\""));
+    }
+
+    @Test
+    void noneListsTheRepositoriesInNoGroupAboveAll() {
+        String html = render("none", List.of(new RepositoryGroupDTO("g1", "Apps")), List.of()).replaceAll("\\s+", " ");
+
+        assertTrue(html.contains("class=\"group-item group-none active\" title=\"Repositories in no group\">None</a>"));
+        assertTrue(html.contains("hx-get=\"/repositories?group=none\""));
+        assertTrue(html.indexOf(">None</a>") < html.indexOf(">All</a>"));
+        assertTrue(html.contains("class=\"group-item\">All</a>"));
+        assertTrue(html.contains("Every repository is in a group."));
+        assertTrue(html.contains("name=\"group\" value=\"none\""));
+    }
+
+    @Test
     void withoutGroupsTheEditModalSaysHowToCreateOne() {
         String html = render(null, List.of(), List.of());
 

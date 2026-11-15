@@ -34,13 +34,14 @@ public class RepositoriesController {
     }
 
     /**
-     * Builds the repositories page, listing the tracked repositories, all or
-     * those of one group.
+     * Builds the repositories page, listing the tracked repositories: all,
+     * those of one group, or those in no group.
      *
      * @param identity  the caller, from auth's identity token
      * @param model     the model to populate for rendering
      * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
-     * @param group     the id of the group to show, if any
+     * @param group     the id of the group to show, or {@value RepositoryService#NO_GROUP} for the
+     *                  repositories in no group; none for all
      * @return the repositories content fragment or the full page layout
      */
     @GetMapping
@@ -73,6 +74,36 @@ public class RepositoriesController {
             return answerRequest(identity, model, hxRequest, group);
         } catch (IllegalArgumentException e) {
             log.debug("User {} can't create group '{}': {}", identity.userId(), LogSafe.of(name), LogSafe.of(e.getMessage()));
+            return badRequest(model, response, e);
+        }
+    }
+
+    /**
+     * Renames one of the caller's groups. On success re-renders the
+     * repositories fragment; on failure responds {@code 400} with an error
+     * fragment for the rename modal, which stays open.
+     *
+     * @param identity  the caller, from auth's identity token
+     * @param model     the model to populate for rendering
+     * @param response  the HTTP response, used to set a 400 status on error
+     * @param hxRequest the {@code HX-Request} header, present when the request comes from HTMX
+     * @param groupId   the group to rename
+     * @param name      its new name
+     * @param group     the group shown when the form was sent, kept as the filter
+     * @return the repositories content fragment (success) or the error fragment (failure)
+     */
+    @PostMapping("/groups/rename")
+    public String renameGroup(Identity identity, Model model, HttpServletResponse response,
+                              @RequestHeader(value = "HX-Request", required = false) String hxRequest,
+                              @RequestParam("groupId") String groupId,
+                              @RequestParam(value = "name", required = false) String name,
+                              @RequestParam(value = "group", required = false) String group) {
+        try {
+            repositoryService.renameGroup(identity.userId(), groupId, name);
+            return answerRequest(identity, model, hxRequest, group);
+        } catch (IllegalArgumentException e) {
+            log.debug("User {} can't rename group {} to '{}': {}", identity.userId(), LogSafe.of(groupId), LogSafe.of(name),
+                    LogSafe.of(e.getMessage()));
             return badRequest(model, response, e);
         }
     }
@@ -238,13 +269,15 @@ public class RepositoriesController {
      * @param identity  the caller, whose data the page shows
      * @param model     the model to populate
      * @param hxRequest the {@code HX-Request} header value, if present
-     * @param group     the id of the group to show, or {@code null} for all;
-     *                  an id that isn't one of the user's groups shows all
+     * @param group     the id of the group to show, {@value RepositoryService#NO_GROUP} for the
+     *                  repositories in no group, or {@code null} for all; an
+     *                  id that isn't one of the user's groups shows all
      * @return the view name to render
      */
     private String answerRequest(Identity identity, Model model, String hxRequest, String group) {
         List<RepositoryGroupDTO> groups = repositoryService.getGroups(identity.userId());
-        String selected = groups.stream().map(RepositoryGroupDTO::id).filter(id -> id.equals(group)).findFirst().orElse(null);
+        String selected = RepositoryService.NO_GROUP.equals(group) ? group
+                : groups.stream().map(RepositoryGroupDTO::id).filter(id -> id.equals(group)).findFirst().orElse(null);
         model.addAttribute("groups", groups);
         model.addAttribute("selectedGroup", selected);
         model.addAttribute("repositories", repositoryService.getRepositories(identity.userId(), selected));

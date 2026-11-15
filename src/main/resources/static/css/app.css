@@ -339,6 +339,16 @@ body {
     min-width: 0;
 }
 
+/* Text filter above the repositories table (filtered in app.js, no request) */
+.repo-filter {
+    margin-bottom: 12px;
+}
+
+.repo-filter .form-control {
+    width: 100%;
+    max-width: 360px;
+}
+
 .repo-groups {
     width: 200px;
     flex-shrink: 0;
@@ -403,7 +413,8 @@ body {
     min-width: 0;
 }
 
-.group-delete {
+.group-delete,
+.group-rename {
     flex-shrink: 0;
     width: 24px;
     height: 24px;
@@ -421,6 +432,44 @@ body {
 .group-delete:focus-visible {
     color: #cf222e;
     background-color: rgba(207, 34, 46, 0.1);
+}
+
+.group-rename {
+    font-size: 14px;
+}
+
+.group-rename:hover,
+.group-rename:focus-visible {
+    color: #0969da;
+    background-color: rgba(9, 105, 218, 0.1);
+}
+
+/* A repository's groups in the table: small chips that filter by the group */
+.group-chips {
+    max-width: 220px;
+}
+
+.group-chip {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+    padding: 1px 8px;
+    border: 1px solid #d0d7de;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    color: #57606a;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.group-chip:hover {
+    border-color: #0969da;
+    color: #0969da;
+}
+
+.group-chip.active {
+    border-color: #0969da;
+    background-color: rgba(9, 105, 218, 0.14);
+    color: #0969da;
 }
 
 .modal-hint {

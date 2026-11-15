@@ -32,10 +32,12 @@ class DashboardPageTest {
 
     @Test
     void withoutRunsTheWorkflowPanelSaysHowToStartOne() {
-        String html = render("active-workflow-content", Map.of("activeWorkflows", List.of(), "activeWorkflowRefreshIntervalSeconds", 7));
+        String html = render("active-workflow-content", Map.of("activeWorkflows", List.of(), "anyWorkflowActive", false,
+                "activeWorkflowRefreshIntervalSeconds", 7));
 
         assertTrue(html.contains("id=\"activeWorkflows\""));
-        assertTrue(html.contains("hx-trigger=\"every 7s\""));
+        assertFalse(html.contains("hx-trigger"));
+        assertFalse(html.contains("hx-get"));
         assertTrue(html.contains("No workflows running"));
     }
 
@@ -48,8 +50,10 @@ class DashboardPageTest {
                 stage(1, "running", true, "https://github.com/polemonLX/auth/actions/runs/8", null),
                 stage(2, "waiting", false, null, null)));
 
-        String html = squash(render("active-workflow-content", Map.of("activeWorkflows", List.of(run))));
+        String html = squash(render("active-workflow-content", Map.of("activeWorkflows", List.of(run), "anyWorkflowActive", true,
+                "activeWorkflowRefreshIntervalSeconds", 7)));
 
+        assertTrue(html.contains("hx-get=\"/dashboards/active-workflow/refresh\" hx-trigger=\"every 7s\""));
         assertTrue(html.contains("<span class=\"workflow-name\">release</span>"));
         assertTrue(html.contains("3 stage(s)"));
         assertTrue(html.contains(" · started 10:00:00 11/11/2026"));
@@ -81,6 +85,7 @@ class DashboardPageTest {
         InternalWorkflowActiveDTO waiting = run("nightly", "waiting", true);
 
         String html = squash(render("active-workflow-content", Map.of("activeWorkflows", List.of(failed, finished, stopped, waiting))));
+        String ended = squash(render("active-workflow-content", Map.of("activeWorkflows", List.of(failed, finished), "anyWorkflowActive", false)));
 
         assertTrue(html.contains("> Failed </span>"));
         assertTrue(html.contains("> Finished </span>"));
@@ -92,6 +97,9 @@ class DashboardPageTest {
         assertTrue(html.contains("hx-post=\"/dashboards/active-workflow/dismiss?workflowName=release\""));
         assertTrue(html.contains("aria-label=\"Remove deploy from the list\""));
         assertTrue(html.contains("hx-post=\"/dashboards/active-workflow/stop?workflowName=nightly\""));
+        assertFalse(html.contains("hx-trigger"));
+        assertFalse(ended.contains("hx-trigger"));
+        assertTrue(ended.contains("> Finished </span>"));
     }
 
     @Test

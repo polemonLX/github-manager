@@ -70,6 +70,15 @@ class RepositoriesControllerTest {
     }
 
     @Test
+    void showsTheRepositoriesInNoGroup() throws Exception {
+        mvc.perform(get("/repositories").param("group", "none").header("HX-Request", "true"))
+                .andExpect(view().name("pages/repositories :: content"))
+                .andExpect(model().attribute("selectedGroup", "none"));
+
+        verify(repositoryService).getRepositories("u1", "none");
+    }
+
+    @Test
     void anUnknownGroupShowsEveryRepository() throws Exception {
         mvc.perform(get("/repositories").param("group", "someone-elses").header("HX-Request", "true"))
                 .andExpect(model().attribute("selectedGroup", (Object) null));
@@ -92,6 +101,27 @@ class RepositoriesControllerTest {
         doThrow(new IllegalArgumentException("A group named 'Apps' already exists")).when(repositoryService).createGroup("u1", "Apps");
 
         mvc.perform(post("/repositories/groups").param("name", "Apps"))
+                .andExpect(status().isBadRequest())
+                .andExpect(view().name("pages/repositories :: addRepoError"))
+                .andExpect(model().attribute("error", "A group named 'Apps' already exists"));
+    }
+
+    @Test
+    void renamesAGroupKeepingTheFilter() throws Exception {
+        mvc.perform(post("/repositories/groups/rename").param("groupId", "g2").param("name", "Libraries").param("group", "g1")
+                        .header("HX-Request", "true"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("pages/repositories :: content"))
+                .andExpect(model().attribute("selectedGroup", "g1"));
+
+        verify(repositoryService).renameGroup("u1", "g2", "Libraries");
+    }
+
+    @Test
+    void anInvalidRenameIsA400WithTheReason() throws Exception {
+        doThrow(new IllegalArgumentException("A group named 'Apps' already exists")).when(repositoryService).renameGroup("u1", "g2", "Apps");
+
+        mvc.perform(post("/repositories/groups/rename").param("groupId", "g2").param("name", "Apps"))
                 .andExpect(status().isBadRequest())
                 .andExpect(view().name("pages/repositories :: addRepoError"))
                 .andExpect(model().attribute("error", "A group named 'Apps' already exists"));
